@@ -18,11 +18,13 @@
 # v config file
 # v integrated cache directory?
 
-libloc=$(realpath "$0")
-libloc=$( dirname "$libloc" )
+inc=( "$( dirname $( realpath "$0") )/$lib" "$(dirname $0)" )
 for lib in libfrmt.sh libwiki.sh libupdates.sh; do
-   lib="$libloc/$lib"
-   if test -e "$lib"; then source "$lib"; else echo "Library $lib not found."; exit 1; fi
+   found=0
+   for libinc in "${inc[@]}"; do
+      test -e "$libinc/$lib" && { source "$libinc/$lib"; found=1; break; }
+   done
+   test "$found" -eq 0 && { echo "Library $lib not found."; exit 1; }
 done
 
 makesection() {
