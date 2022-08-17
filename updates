@@ -1,0 +1,474 @@
+#!/usr/bin/env bash
+#
+# Upgrade systems and create report
+#
+# ToDo:
+# v Exclude containers
+# v Include containers
+# v Exclude hosts
+# v improve library includes
+# v Create actions (only 1 at a time)
+# - Output function (stderr)?
+# v Integrate update functionality
+#   v FLUSH <-> FORCE
+# v Dryrun for upgrades
+# v More modular report
+# v Reverse options, put after help
+# - upgrade: Skip snapshotting for containers
+# v config file
+# v integrated cache directory?
+
+libloc=$(realpath "$0")
+libloc=$( dirname "$libloc" )
+for lib in libfrmt.sh libwiki.sh libupdates.sh; do
+   lib="$libloc/$lib"
+   if test -e "$lib"; then source "$lib"; else echo "Library $lib not found."; exit 1; fi
+done
+
+makesection() {
+   cache="$1"
+   title="$2"
+
+   frmt new frmtreport $(wiki type)
+   frmtreport h1 "$title"
+   frmtreport del
+   shift
+   done=0
+   num="$#"
+   for host in "$@"; do
+      if test -e "$cache/$host/$host"; then
+         test ! -z "$cache/$host/$host" && cat "$cache/$host/$host"
+         cts=( $( ls "$cache/$host/" | grep -v "$host" ) )
+         if test "${#cts[*]}" -gt 0; then
+            frmt new frmtreport $(wiki type)
+            frmtreport foldstart "${#cts[@]} containers"
+            for ct in "${cts[@]}"; do
+               test ! -z "$cache/$host/$ct" && cat "$cache/$host/$ct"
+            done
+            frmtreport foldend
+            frmtreport del
+         fi
+      fi
+   done
+}
+
+report_upgrade() {
+   local output="$1"
+   local h="$2"
+   local host="$3"
+   local ret="$4"
+   local line
+   local stamp="$(date "+%Y/%m/%d %H:%M:%S")"
+
+   local state="ok"
+   [[ " ${updates_output[*]} " =~ " Configuration file " ]] && state="CONFIG CHANGE"
+   test "$ret" != "0" && state="FAIL"
+   $output "$h" "$host ($state) ($stamp)"
+   $output foldstart "Output ${#updates_output[*]} lines"
+   for line in "${updates_output[@]}"; do
+      $output pre "$line"
+   done
+   $output foldend
+}
+
+report_check() {
+   local output="$1"
+   local h="$2"
+   local host="$3"
+   local ret="$4"
+   local line
+   local stamp="$(date "+%Y/%m/%d %H:%M:%S")"
+
+   $output "$h" "$host"
+   unset p1 p2
+   test "${#updates_avail[*]}" -gt 0 && local p1="${#updates_avail[*]} updates"
+   test "${#updates_hold[*]}" -gt 0 && local p2="${#updates_hold[*]} hold"
+   test "$p1" != "" -a "$p2" != "" && $output foldstart "$p1/$p2" || $output foldstart "$p1$p2"
+   $output t_head Package "Current version" "New version" Source
+   for pkg in ${updates_hold[*]}; do
+      $output t_line "$pkg (on hold)" "${updates_curver[$pkg]}" "${updates_newver[$pkg]}" "${updates_newversrc[$pkg]}"
+   done
+   for pkg in ${updates_avail[*]}; do
+      $output t_line "$pkg" "${updates_curver[$pkg]}" "${updates_newver[$pkg]}" "${updates_newversrc[$pkg]}"
+   done
+   $output t_end
+   $output foldend
+}
+
+checkcache() {
+   local cache="$1"
+   local host="$2"
+   local ct="$3"
+   local dst
+
+   test -d "$cache/$host" || mkdir -p "$cache/$host"
+
+   dst="$cache/$host/$host"
+   test "$ct" != "" && dst="$cache/$host/$ct"
+   test "$FORCE" -eq 1 && return 0
+   if test -e "$dst"; then
+      lastmod=$(stat -c "%Y" "$dst")
+      test $(( $(date "+%s") - lastmod )) -lt $MAXCACHEAGE && return 1
+   #else
+   #   return 2
+   fi
+   return 0
+}
+
+checkhosts() {
+   local done=0
+   local num="$#"
+   local updatesfound
+   local cache="$CACHE/updates"
+   local opts
+   declare -a opts
+
+   test "$UPDATE" -eq 1 && opts+=( "-u" )
+
+   for host in "$@"; do
+      checkhost=1
+      done=$(( done + 1 ))
+      [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
+
+      updatesfound=0
+      test "${host//./}" = "$host" && { printf "Skipping host ${host}, does not look like fqdn.\n"; continue; }
+      updates is-container "$host" && { printf "Skipping host ${host}, is a container.\n"; continue; }
+      test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s" "$done" "$num" "$host" >&2
+
+      if test "$checkhost" -eq 1 && checkcache "$cache" "$host"; then
+         rm -f "$cache/$host/$host"
+         updates check "${opts[@]}" "$host" || { printf "\33[2K\rError on $host (%s)\n" "$(updates error)" >&2; continue; }
+         if test "${#updates_avail[*]}" -gt 0 -o ${#updates_hold[*]} -gt 0; then
+            updatesfound=1
+            frmt new frmtreport $(wiki type)
+            frmtreport output -f "$cache/$host/$host"
+            report_check frmtreport h2 "$host" "$ret"
+            frmtreport del
+         fi
+      fi
+
+      updates list-containers "$host"
+      test "${#containers[*]}" -eq 0 && continue
+      ctdone=1
+      for ctid in "${!containers[@]}"; do
+         local ctname="${containers[$ctid]}"
+         test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s (ct %d/%d, %s)" "$done" "$num" "$host" "$ctdone" "${#containers[*]}" "$ctname" >&2
+         ctdone=$(( ctdone + 1 ))
+         [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
+         test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
+         checkcache "$cache" "$host" "$ctname" || continue
+         rm -f "$cache/$host/$ctname"
+         updates check "${opts[@]}" "$host" "$ctid" || { echo "Error on container $ctname ($(updates error))" >&2; continue; }
+         if test "${#updates_avail[*]}" -gt 0 -o ${#updates_hold[*]} -gt 0; then
+            if test "$updatesfound" -eq 0; then
+               frmt new frmtreport $(wiki type)
+               frmtreport output -f "$cache/$host/$host"
+               frmtreport h2 "$host"
+               frmtreport del
+            fi
+            updatesfound=1
+            frmt new frmtreport $(wiki type)
+            frmtreport output -f "$cache/$host/$ctname"
+            report_check frmtreport h3 "$ctname ($ctid@$host)" "$ret"
+            frmtreport del
+         fi
+      done
+   done
+   test "$QUIET" -eq 0 && printf "\33[2K\r" >&2
+}
+
+
+upgradehosts() {
+   local done=0
+   local num="$#"
+   local checkhost dstfile
+   local cache="$CACHE/upgrades"
+   local opts
+   declare -a opts
+
+   test "$DRYRUN" -eq 1 && opts+=( "-s" )
+   test "$DOWNLOAD" -eq 1 && opts+=( "-d" )
+
+   for host in "$@"; do
+      checkhost=1
+      done=$(( done + 1 ))
+      [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
+      test "${host//./}" = "$host" && { printf "Skipping host ${host}, does not look like fqdn.\n"; continue; }
+      updates is-container "$host" && { printf "Skipping host ${host}, is a container.\n"; continue; }
+      test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s" "$done" "$num" "$host" >&2
+
+      if test "$checkhost" -eq 1 && checkcache "$cache" "$host"; then
+         updates check "$host"
+         dstfile="$cache/$host/$host"
+         if test "${#updates_avail[*]}" -gt 0; then
+            frmt new frmtreport $(wiki type)
+            frmtreport output -f "$dstfile"
+            updates upgrade "${opts[@]}" "$host"
+            ret=$?
+            report_upgrade frmtreport h2 "$host" "$ret"
+            frmtreport del
+         else
+            test -e "$dstfile" && touch "$dstfile"
+         fi
+      fi
+
+      updates list-containers "$host"
+      test "${#containers[*]}" -eq 0 && continue
+      ctdone=1
+      for ctid in "${!containers[@]}"; do
+         ctdone=$(( ctdone + 1 ))
+         [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
+         test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
+         local ctname="${containers[$ctid]}"
+         test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s (ct %d/%d, %s)" "$done" "$num" "$host" "$ctdone" "${#containers[*]}" "$ctname" >&2
+         checkcache "$cache" "$host" "$ctname" || continue
+         updates check "$host" "$ctid"
+         dstfile="$cache/$host/$ctname"
+         if test "${#updates_avail[*]}" -gt 0; then
+            frmt new frmtreport $(wiki type)
+            frmtreport output -f "$dstfile"
+            updates upgrade "${opts[@]}" "$host" "$ctid"
+            ret=$?
+            report_upgrade frmtreport h3 "$ctname ($ctid@$host)" "$ret"
+            frmtreport del
+         else
+            test -e "$dstfile" && touch "$dstfile"
+         fi
+      done
+   done
+   test "$QUIET" -eq 0 && printf "\33[2K\r" >&2
+}
+
+check-report() {
+   local systems
+   local cache="$CACHE/updates"
+
+   wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; }
+   report=$(mktemp)
+   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$report"
+   for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
+      unset systems
+      [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
+      [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
+      makesection "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$report"
+   done
+   wiki save "${main[checkreport]}" - < "$report" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; }
+   rm -f "$report"
+}
+
+upgrade-report() {
+   local systems
+   local cache="$CACHE/upgrades"
+
+   wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; }
+   report=$(mktemp)
+   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$report"
+   for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
+      unset systems
+      [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
+      [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
+      makesection "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$report"
+   done
+   wiki save "${main[upgradereport]}" - < "$report" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; }
+   rm -f "$report"
+}
+
+usage() {
+   case "$1" in
+   "check") echo "$0 $1 <options> [host fqdn..]"
+      echo
+      echo "When specifying a host, the fqdn should be used."
+      echo "When no host(s) are specified, a full host list will be used."
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      echo "   -f            Force updates check even if cached report is not expired."
+      echo "   -u            Update package information on system."
+      echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
+      echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated."
+      echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
+      ;;
+   "check-report") echo "$0 $1 <options>"
+      echo
+      echo "When specifying a host, the fqdn should be used."
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      echo "   -p <page>     Name of the page to upload to (defaults to ${main[checkreport]})."
+      ;;
+   "upgrade") echo "$0 $1 <options> [host fqdn..]"
+      echo
+      echo "When specifying a host, the fqdn should be used."
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      echo "   -s            Simulate, don't actually upgrade."
+      echo "   -d            Download packages, don't install."
+      echo "   -f            Force upgrade check even if cached report is not expired."
+      echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
+      echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated."
+      echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
+      ;;
+   "upgrade-report") echo "$0 $1 <options>"
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      echo "   -p <page>     Name of the page to upload to (defaults to ${main[upgradereport]})."
+      ;;
+   *) echo "$0 [options..] <action> [option(s)...]"
+      echo
+      echo "Action:"
+      echo "  check           Check hosts for updates."
+      echo "  check-report    Generate hosts with updates report."
+      echo "  upgrade         Upgrade specified host(s)."
+      echo "  upgrade-report  Generate upgrade report."
+      echo
+      echo "Options:"
+      echo "   -c <cfg file>  Config file (defaults to $CFG)."
+      echo "   -q             Be quiet."
+      echo "   -h             This help."
+      ;;
+   esac
+   exit 1
+}
+
+readconfig() {
+   local var
+   local val
+   local section
+   local cfg
+
+   ! test -e $CFG && { echo "Config file $CFG does not exist."; exit 1; }
+   test $(stat -c %a $CFG) -gt 600 && { echo "Unsafe permissions on config file $CFG."; exit 1; }
+
+   while IFS='= ' read var val
+   do
+      if [[ $var == \[*] ]]
+      then
+          section=${var:1:-1}
+      elif [[ $val ]]
+      then
+          declare -g -A "$section[$var]=$val"
+      fi
+   done < <(grep -v "^#" $CFG)
+   test "${main[wikiprofile]}" = "" && { echo "wikiprofile not defined in config file."; exit 1; }
+   test "${main[allhostslist]}" = "" -a "${main[allhostscmd]}" = "" && { echo "allhostslist and allhostscmd not defined in config file."; exit 1; }
+   test "${main[allhostslist]}" != "" -a "${main[allhostscmd]}" != "" && { echo "allhostslist and allhostscmd both defined in config file."; exit 1; }
+   test "${main[checkreport]}" = "" && main[checkreport]="Updatereport"
+   test "${main[upgradereport]}" = "" && main[upgradereport]="Upgradereport"
+   test "${main[allhostscmd]}" != "" && allhosts=( $( bash -c "${main[allhostscmd]}" ) )
+   test "${main[allhostslist]}" != "" && allhosts=( ${main[allhostslist]} )
+}
+
+arguments() {
+   while getopts :hqc: opt; do
+     case $opt in
+     h) usage ;;
+     q) QUIET=1 ;;
+     c) CFG=$OPTARG ;;
+     \?) echo "Unknown option: -$OPTARG"; usage ;;
+     :) echo "Option -$OPTARG requires argument"; usage ;;
+     esac
+   done
+   shift $((OPTIND-1))
+
+   readconfig
+
+   action="$1"; shift
+   OPTIND=1
+
+   case "$action" in
+   "check")
+      while getopts :hfui:e:E: opt; do
+         case $opt in
+         h) usage $action ;;
+         f) FORCE=1 ;;
+         u) UPDATE=1 ;;
+         i) ctincl=( ${OPTARG//,/ } ) ;;
+         e) ctexcl=( ${OPTARG//,/ } ) ;;
+         E) hostexcl=( ${OPTARG//,/ } ) ;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action ;;
+         :) echo "Option -$OPTARG requires argument"; usage $action ;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+      test "${#hosts[*]}" -eq 0 && hosts=( "${allhosts[@]}" )
+   ;;
+   "check-report")
+      while getopts :hfp:i:e:E: opt; do
+         case $opt in
+         h) usage $action;;
+         p) main[checkreport]="$OPTARG" ;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+   ;;
+   "upgrade")
+      while getopts :hfdsi:e:E: opt; do
+         case $opt in
+         h) usage $action ;;
+         f) FORCE=1 ;;
+         s) DRYRUN=1 ;;
+         d) DOWNLOAD=1 ;;
+         i) ctincl=( ${OPTARG//,/ } ) ;;
+         e) ctexcl=( ${OPTARG//,/ } ) ;;
+         E) hostexcl=( ${OPTARG//,/ } ) ;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action ;;
+         :) echo "Option -$OPTARG requires argument"; usage $action ;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+      test "${#hosts[*]}" -eq 0 && { echo "No hosts are specified."; usage $action; }
+   ;;
+   "upgrade-report")
+      while getopts :hfp:i:e:E: opt; do
+         case $opt in
+         h) usage $action;;
+         p) main[upgradereport]="$OPTARG" ;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+   ;;
+   *) echo "Unknown action $action"; usage ;;
+   esac
+}
+
+main() {
+   CACHE="$HOME/.updates.cache"
+   MAXCACHEAGE=6000
+   FORCE=0
+   DRYRUN=0
+   DOWNLOAD=0
+   UPDATE=0
+   QUIET=0
+   CFG=~/.updates.ini
+
+   ! test -d "$CACHE" && mkdir "$CACHE"
+
+   arguments "$@"
+
+   wiki profile "${main[wikiprofile]}" || { echo "Unable to open wiki ($(wiki error))"; exit 1; }
+   case "$action" in
+   "check")
+      checkhosts "${hosts[@]}"
+   ;;
+   "check-report")
+      check-report
+   ;;
+   "upgrade")
+      upgradehosts "${hosts[@]}"
+   ;;
+   "upgrade-report")
+      upgrade-report
+   ;;
+   *) echo "Unknown action $action"; usage ;;
+   esac
+}
+
+main "$@"
