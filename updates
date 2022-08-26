@@ -2,21 +2,6 @@
 #
 # Upgrade systems and create report
 #
-# ToDo:
-# v Exclude containers
-# v Include containers
-# v Exclude hosts
-# v improve library includes
-# v Create actions (only 1 at a time)
-# - Output function (stderr)?
-# v Integrate update functionality
-#   v FLUSH <-> FORCE
-# v Dryrun for upgrades
-# v More modular report
-# v Reverse options, put after help
-# - upgrade: Skip snapshotting for containers
-# v config file
-# v integrated cache directory?
 
 inc=( "$( dirname $( realpath "$0") )/$lib" "$(dirname $0)" )
 for lib in libfrmt.sh libwiki.sh libupdates.sh; do
