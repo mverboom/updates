@@ -134,6 +134,7 @@ checkhosts() {
          fi
       fi
 
+      test "${ctexcl[0]}" = "all" && continue
       updates list-containers "$host"
       test "${#containers[*]}" -eq 0 && continue
       ctdone=1
@@ -199,6 +200,7 @@ upgradehosts() {
          fi
       fi
 
+      test "${ctexcl[0]}" = "all" && continue
       updates list-containers "$host"
       test "${#containers[*]}" -eq 0 && continue
       ctdone=1
@@ -272,7 +274,7 @@ usage() {
       echo "   -f            Force updates check even if cached report is not expired."
       echo "   -u            Update package information on system."
       echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
-      echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated."
+      echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated. If only keyword \"all\" is specified, all containers will be excluded."
       echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
       ;;
    "check-report") echo "$0 $1 <options>"
@@ -293,7 +295,7 @@ usage() {
       echo "   -d            Download packages, don't install."
       echo "   -f            Force upgrade check even if cached report is not expired."
       echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
-      echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated."
+      echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated. If only keyword \"all\" is specified, all containers will be excluded."
       echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
       ;;
    "upgrade-report") echo "$0 $1 <options>"
