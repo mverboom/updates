@@ -264,6 +264,7 @@ upgrade() {
    test "$QUIET" -eq 0 && printf "\33[2K\r" >&2
 }
 
+<<<<<<< HEAD
 upgrade-render-host() {
    local output="$1"
    local h="$2"
@@ -271,6 +272,26 @@ upgrade-render-host() {
    local ret="$4"
    local line
    local stamp="$(date -d "@$date" "+%Y/%m/%d %H:%M:%S")"
+=======
+check-list() {
+   local systems
+   local cache="$CACHE/updates"
+
+   for host in $(ls $cache); do
+       test "${#hosts[*]}" -gt 0 && [[ ! " ${hosts[@]} " =~ " ${host} " ]] && continue
+       test "$ctonly" != "1" -a -f "$cache/$host/$host" && test "$(wc -l < "$cache/$host/$host")" -gt 1 && echo "$host"
+       if test "$hostonly" != "1"; then
+           for ct in $(ls $cache/$host | grep -v "$host"); do
+               echo "$ct"
+           done
+       fi
+   done
+}
+
+check-report() {
+   local systems
+   local cache="$CACHE/updates"
+>>>>>>> github/main
 
    local state="ok"
    [[ " ${updates_output[*]} " =~ " Configuration file " ]] && state="CONFIG CHANGE"
@@ -331,6 +352,16 @@ usage() {
       echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated. If only keyword \"all\" is specified, all containers will be excluded."
       echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
       ;;
+   "check-list") echo "$0 $1 <options> [host fqdn..]"
+      echo
+      echo "When specifying a host, the fqdn should be used."
+      echo "When no host(s) are specified, all hosts in cache will be used."
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      echo "   -H            Only show hosts with updates."
+      echo "   -C            Only show containers with updates."
+      ;;
    "check-report") echo "$0 $1 <options>"
       echo
       echo "When specifying a host, the fqdn should be used."
@@ -364,6 +395,7 @@ usage() {
       echo "Action:"
       echo "  check           Check hosts for updates."
       echo "  check-report    Generate hosts with updates report."
+      echo "  check-list      Generate list of hosts with pending updates."
       echo "  upgrade         Upgrade specified host(s)."
       echo "  upgrade-report  Generate upgrade report."
       echo
@@ -439,6 +471,19 @@ arguments() {
       test $# -ne 0 && hosts=( "$@" )
       test "${#hosts[*]}" -eq 0 && hosts=( "${allhosts[@]}" )
    ;;
+   "check-list")
+      while getopts :hHC opt; do
+         case $opt in
+         h) usage $action;;
+         H) hostonly=1;;
+         C) ctonly=1;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+   ;;
    "check-report")
       while getopts :hHfp:i:e:E: opt; do
          case $opt in
@@ -502,6 +547,9 @@ main() {
    case "$action" in
    "check")
       check "${hosts[@]}"
+   ;;
+   "check-list")
+      check-list
    ;;
    "check-report")
       check-report
