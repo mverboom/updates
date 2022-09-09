@@ -144,6 +144,73 @@ check-save() {
    } > "$output"
 }
 
+check-container() {
+   local ctname="${containers[$ctid]}"
+
+   [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && return
+   test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && return
+   verifycache "$cache" "$host" "$ctname" || return
+   rm -f "$cache/$host/$ctname"
+   updates check "${opts[@]}" "$host" "$ctid" || { println "Error on container $ctname ($(updates error))" >&2; return; }
+   if test "${#updates_avail[*]}" -gt 0 -o ${#updates_hold[*]} -gt 0; then
+      check-save "$cache/$host/$ctname"
+   fi
+}
+
+check-host() {
+   local line="$1"
+   unset ctname ctid
+   checkhost=1
+   local jobs=4
+   declare -a running
+   declare -a runningct
+   local slot=0
+
+   [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
+
+   println() {
+      test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
+   }
+
+   updatesfound=0
+   test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn."; return; }
+   updates is-container "$host" && { println "Skipping host ${host}, is a container."; return; }
+   test "$QUIET" -eq 0 && println "$done/$num $host" >&2
+
+   if test "$checkhost" -eq 1 && verifycache "$cache" "$host"; then
+      rm -f "$cache/$host/$host"
+      updates check "${opts[@]}" "$host" || println "Error on $host $(updates error)" >&2
+      if test "${#updates_avail[*]}" -gt 0 -o ${#updates_hold[*]} -gt 0; then
+         updatesfound=1
+         check-save "$cache/$host/$host"
+      fi
+   fi
+
+   test "${ctexcl[0]}" = "all" && { println "$done/$num done"; return; }
+   updates list-containers "$host"
+   test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
+   ctdone=0
+   for ctid in "${!containers[@]}"; do
+      check-container $(( jobs - slot )) &
+      running[$slot]="$!"
+      runningct[$slot]="$ctid"
+      ctdone=$(( ctdone + 1 ))
+      test "$QUIET" -eq 0 && println "$done/$num $host, ct: ${runningct[*]// /,} ($ctdone/${#containers[@]})" >&2
+      if test "${#running[*]}" -eq $jobs; then
+         wait -p pid -n ${running[*]}
+         for slot in ${!running[@]}; do
+            test "${running[$slot]}" = "$pid" && break
+         done
+         unset 'running[slot]'
+         unset 'runningct[slot]'
+      else
+         slot=$(( slot + 1 ))
+      fi
+   done
+   wait
+   println "$done/$num done"
+}
+
 check() {
    local done=0
    local num="$#"
@@ -151,48 +218,29 @@ check() {
    local cache="$CACHE/updates"
    local opts
    declare -a opts
+   local jobs=4
+   declare -a running
+   local slot=0
 
    test "$UPDATE" -eq 1 && opts+=( "-u" )
+   test "$#" -lt "$jobs" && jobs="$#"
 
+   test "$QUIET" -eq 0 && printf '%.0s\n' $(seq 1 $jobs)
    for host in "$@"; do
-      unset ctname ctid
-      checkhost=1
       done=$(( done + 1 ))
-      [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
-
-      updatesfound=0
-      test "${host//./}" = "$host" && { printf "Skipping host ${host}, does not look like fqdn.\n"; continue; }
-      updates is-container "$host" && { printf "Skipping host ${host}, is a container.\n"; continue; }
-      test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s" "$done" "$num" "$host" >&2
-
-      if test "$checkhost" -eq 1 && verifycache "$cache" "$host"; then
-         rm -f "$cache/$host/$host"
-         updates check "${opts[@]}" "$host" || { printf "\33[2K\rError on $host (%s)\n" "$(updates error)" >&2; continue; }
-         if test "${#updates_avail[*]}" -gt 0 -o ${#updates_hold[*]} -gt 0; then
-            updatesfound=1
-            check-save "$cache/$host/$host"
-         fi
+      check-host $(( jobs - slot )) &
+      running[$slot]="$!"
+      if test "${#running[*]}" -eq $jobs; then
+         wait -p pid -n ${running[*]}
+         for slot in ${!running[@]}; do
+            test "${running[$slot]}" = "$pid" && break
+         done
+         unset 'running[slot]'
+      else
+         slot=$(( slot + 1 ))
       fi
-
-      test "${ctexcl[0]}" = "all" && continue
-      updates list-containers "$host"
-      test "${#containers[*]}" -eq 0 && continue
-      ctdone=1
-      for ctid in "${!containers[@]}"; do
-         local ctname="${containers[$ctid]}"
-         test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s (ct %d/%d, %s)" "$done" "$num" "$host" "$ctdone" "${#containers[*]}" "$ctname" >&2
-         ctdone=$(( ctdone + 1 ))
-         [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
-         test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
-         verifycache "$cache" "$host" "$ctname" || continue
-         rm -f "$cache/$host/$ctname"
-         updates check "${opts[@]}" "$host" "$ctid" || { echo "Error on container $ctname ($(updates error))" >&2; continue; }
-         if test "${#updates_avail[*]}" -gt 0 -o ${#updates_hold[*]} -gt 0; then
-            check-save "$cache/$host/$ctname"
-         fi
-      done
    done
-   test "$QUIET" -eq 0 && printf "\33[2K\r" >&2
+   wait
 }
 
 upgradehost-save() {
@@ -223,6 +271,8 @@ upgrade() {
       checkhost=1
       done=$(( done + 1 ))
       [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
+      [[ " ${blacklist[@]} " =~ " ${host} " ]] && test "$NOCTBL" != 1 && continue
+      [[ " ${blacklist[@]} " =~ " ${host} " ]] && checkhost=0
       test "${host//./}" = "$host" && { printf "Skipping host ${host}, does not look like fqdn.\n"; continue; }
       updates is-container "$host" && { printf "Skipping host ${host}, is a container.\n"; continue; }
       test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s" "$done" "$num" "$host" >&2
@@ -248,6 +298,7 @@ upgrade() {
          [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
          test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
          local ctname="${containers[$ctid]}"
+         [[ " ${blacklist[@]} " =~ " ${ctname} " ]] && continue
          test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s (ct %d/%d, %s)" "$done" "$num" "$host" "$ctdone" "${#containers[*]}" "$ctname" >&2
          verifycache "$cache" "$host" "$ctname" || continue
          updates check "$host" "$ctid"
@@ -264,7 +315,6 @@ upgrade() {
    test "$QUIET" -eq 0 && printf "\33[2K\r" >&2
 }
 
-<<<<<<< HEAD
 upgrade-render-host() {
    local output="$1"
    local h="$2"
@@ -272,26 +322,6 @@ upgrade-render-host() {
    local ret="$4"
    local line
    local stamp="$(date -d "@$date" "+%Y/%m/%d %H:%M:%S")"
-=======
-check-list() {
-   local systems
-   local cache="$CACHE/updates"
-
-   for host in $(ls $cache); do
-       test "${#hosts[*]}" -gt 0 && [[ ! " ${hosts[@]} " =~ " ${host} " ]] && continue
-       test "$ctonly" != "1" -a -f "$cache/$host/$host" && test "$(wc -l < "$cache/$host/$host")" -gt 1 && echo "$host"
-       if test "$hostonly" != "1"; then
-           for ct in $(ls $cache/$host | grep -v "$host"); do
-               echo "$ct"
-           done
-       fi
-   done
-}
-
-check-report() {
-   local systems
-   local cache="$CACHE/updates"
->>>>>>> github/main
 
    local state="ok"
    [[ " ${updates_output[*]} " =~ " Configuration file " ]] && state="CONFIG CHANGE"
@@ -380,6 +410,7 @@ usage() {
       echo "   -s            Simulate, don't actually upgrade."
       echo "   -d            Download packages, don't install."
       echo "   -f            Force upgrade check even if cached report is not expired."
+      echo "   -b            Don't blacklist all containers from upgrades if the host is blacklisted."
       echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
       echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated. If only keyword \"all\" is specified, all containers will be excluded."
       echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
@@ -434,6 +465,8 @@ readconfig() {
    test "${main[upgradereport]}" = "" && main[upgradereport]="Upgradereport"
    test "${main[allhostscmd]}" != "" && allhosts=( $( bash -c "${main[allhostscmd]}" ) )
    test "${main[allhostslist]}" != "" && allhosts=( ${main[allhostslist]} )
+   test "${main[upgradeblacklistcmd]}" != "" && blacklist=( $( bash -c "${main[upgradeblacklistcmd]}" ) )
+   test "${main[upgradeblacklist]}" != "" && blacklist=( ${main[upgradeblacklist]} )
 }
 
 arguments() {
@@ -497,9 +530,10 @@ arguments() {
       shift $((OPTIND-1))
    ;;
    "upgrade")
-      while getopts :hfdsi:e:E: opt; do
+      while getopts :hcfdsi:e:E: opt; do
          case $opt in
          h) usage $action ;;
+         c) NOCTBL=1 ;;
          f) FORCE=1 ;;
          s) DRYRUN=1 ;;
          d) DOWNLOAD=1 ;;
