@@ -161,7 +161,7 @@ check-host() {
    local line="$1"
    unset ctname ctid
    checkhost=1
-   local jobs=4
+   local jobs="$PARCT"
    declare -a running
    declare -a runningct
    local slot=0
@@ -191,7 +191,7 @@ check-host() {
    test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
    ctdone=0
    for ctid in "${!containers[@]}"; do
-      check-container $(( jobs - slot )) &
+      check-container &
       running[$slot]="$!"
       runningct[$slot]="$ctid"
       ctdone=$(( ctdone + 1 ))
@@ -218,7 +218,7 @@ check() {
    local cache="$CACHE/updates"
    local opts
    declare -a opts
-   local jobs=4
+   local jobs="$PARHOST"
    declare -a running
    local slot=0
 
@@ -255,64 +255,114 @@ upgradehost-save() {
    } > "$output"
 }
 
+upgrade-container() {
+   local ctname="${containers[$ctid]}"
+
+   verifycache "$cache" "$host" "$ctname" || return
+   updates check "$host" "$ctid" || { println "Error on container $ctname ($(updates error))" >&2; return; }
+   dstfile="$cache/$host/$ctname"
+   if test "${#updates_avail[*]}" -gt 0; then
+      updates upgrade "${opts[@]}" "$host" "$ctid"
+      ret=$?
+      upgradehost-save "$dstfile"
+   else
+      test -e "$dstfile" && touch "$dstfile"
+   fi
+}
+
+upgrade-host() {
+   local line="$1"
+   local jobs="$PARCT"
+   local checkhost dstfile
+   declare -a running runningct
+   unset ctname ctid
+   local slot=0
+   checkhost=1
+
+   println() {
+      test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
+   }
+
+   [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
+   [[ " ${blacklist[@]} " =~ " ${host} " ]] && test "$NOCTBL" != 1 && return
+   [[ " ${blacklist[@]} " =~ " ${host} " ]] && checkhost=0
+   test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn.\n"; return; }
+   updates is-container "$host" && { println "Skipping host ${host}, is a container.\n"; return; }
+   test "$QUIET" -eq 0 && println "$done/$num $host" >&2
+
+   if test "$checkhost" -eq 1 && verifycache "$cache" "$host"; then
+      updates check "$host"
+      dstfile="$cache/$host/$host"
+      if test "${#updates_avail[*]}" -gt 0; then
+         updates upgrade "${opts[@]}" "$host"
+         ret=$?
+         upgradehost-save "$dstfile"
+      else
+         test -e "$dstfile" && touch "$dstfile"
+      fi
+   fi
+
+   test "${ctexcl[0]}" = "all" && { println "%done/$num done"; return; }
+   updates list-containers "$host"
+   test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
+   ctdone=0
+   for ctid in "${!containers[@]}"; do
+      local ctname="${containers[$ctid]}"
+      [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
+      test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
+      [[ " ${blacklist[@]} " =~ " ${ctname} " ]] && continue
+
+      upgrade-container &
+      running[$slot]="$!"
+      runningct[$slot]="$ctid"
+      ctdone=$(( ctdone + 1 ))
+      test "$QUIET" -eq 0 && println "$done/$num $host, ct: ${runningct[*]// /,} ($ctdone/${#containers[@]})" >&2
+      if test "${#running[*]}" -eq $jobs; then
+         wait -p pid -n ${running[*]}
+         for slot in ${!running[@]}; do
+            test "${running[$slot]}" = "$pid" && break
+         done
+         unset 'running[slot]'
+         unset 'runningct[slot]'
+      else
+         slot=$(( slot + 1 ))
+      fi
+   done
+   wait
+   println "$done/$num done"
+}
+
 upgrade() {
    local done=0
    local num="$#"
-   local checkhost dstfile
    local cache="$CACHE/upgrades"
    local opts
    declare -a opts
+   local jobs="$PARHOST"
+   declare -a running
+   local slot=0
 
    test "$DRYRUN" -eq 1 && opts+=( "-s" )
    test "$DOWNLOAD" -eq 1 && opts+=( "-d" )
 
+   test "$#" -lt "$jobs" && jobs="$#"
+
+   test "$QUIET" -eq 0 && printf '%.0s\n' $(seq 1 $jobs)
    for host in "$@"; do
-      unset ctname ctid
-      checkhost=1
       done=$(( done + 1 ))
-      [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
-      [[ " ${blacklist[@]} " =~ " ${host} " ]] && test "$NOCTBL" != 1 && continue
-      [[ " ${blacklist[@]} " =~ " ${host} " ]] && checkhost=0
-      test "${host//./}" = "$host" && { printf "Skipping host ${host}, does not look like fqdn.\n"; continue; }
-      updates is-container "$host" && { printf "Skipping host ${host}, is a container.\n"; continue; }
-      test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s" "$done" "$num" "$host" >&2
-
-      if test "$checkhost" -eq 1 && verifycache "$cache" "$host"; then
-         updates check "$host"
-         dstfile="$cache/$host/$host"
-         if test "${#updates_avail[*]}" -gt 0; then
-            updates upgrade "${opts[@]}" "$host"
-            ret=$?
-            upgradehost-save "$dstfile"
-         else
-            test -e "$dstfile" && touch "$dstfile"
-         fi
+      upgrade-host $(( jobs - slot )) &
+      running[$slot]="$!"
+      if test "${#running[*]}" -eq $jobs; then
+         wait -p pid -n ${running[*]}
+         for slot in ${!running[@]}; do
+            test "${running[$slot]}" = "$pid" && break
+         done
+         unset 'running[slot]'
+      else
+         slot=$(( slot + 1 ))
       fi
-
-      test "${ctexcl[0]}" = "all" && continue
-      updates list-containers "$host"
-      test "${#containers[*]}" -eq 0 && continue
-      ctdone=1
-      for ctid in "${!containers[@]}"; do
-         ctdone=$(( ctdone + 1 ))
-         [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
-         test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
-         local ctname="${containers[$ctid]}"
-         [[ " ${blacklist[@]} " =~ " ${ctname} " ]] && continue
-         test "$QUIET" -eq 0 && printf "\33[2K\r%d/%d %s (ct %d/%d, %s)" "$done" "$num" "$host" "$ctdone" "${#containers[*]}" "$ctname" >&2
-         verifycache "$cache" "$host" "$ctname" || continue
-         updates check "$host" "$ctid"
-         dstfile="$cache/$host/$ctname"
-         if test "${#updates_avail[*]}" -gt 0; then
-            updates upgrade "${opts[@]}" "$host" "$ctid"
-            ret=$?
-            upgradehost-save "$dstfile"
-         else
-            test -e "$dstfile" && touch "$dstfile"
-         fi
-      done
    done
-   test "$QUIET" -eq 0 && printf "\33[2K\r" >&2
+   wait
 }
 
 upgrade-render-host() {
@@ -378,6 +428,7 @@ usage() {
       echo "   -h            This help."
       echo "   -f            Force updates check even if cached report is not expired."
       echo "   -u            Update package information on system."
+      echo "   -p            Enable parallelism."
       echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
       echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated. If only keyword \"all\" is specified, all containers will be excluded."
       echo "   -E <host(s)>  Exclude these hosts(s). Any containers on the host will be checked. Should be comma separated."
@@ -410,6 +461,7 @@ usage() {
       echo "   -s            Simulate, don't actually upgrade."
       echo "   -d            Download packages, don't install."
       echo "   -f            Force upgrade check even if cached report is not expired."
+      echo "   -p            Enable parallelism."
       echo "   -b            Don't blacklist all containers from upgrades if the host is blacklisted."
       echo "   -i <ctid(s)>  Include only container id(s). Should be comma separated."
       echo "   -e <ctid(s)>  Exclude these container id(s). Should be comma separated. If only keyword \"all\" is specified, all containers will be excluded."
@@ -488,12 +540,13 @@ arguments() {
 
    case "$action" in
    "check")
-      while getopts :hfui:e:E: opt; do
+      while getopts :hfpui:e:E: opt; do
          case $opt in
          h) usage $action ;;
          f) FORCE=1 ;;
          u) UPDATE=1 ;;
          i) ctincl=( ${OPTARG//,/ } ) ;;
+         p) PARALLEL=1 ;;
          e) ctexcl=( ${OPTARG//,/ } ) ;;
          E) hostexcl=( ${OPTARG//,/ } ) ;;
          \?) echo "Unknown option: -$OPTARG"; usage $action ;;
@@ -530,11 +583,12 @@ arguments() {
       shift $((OPTIND-1))
    ;;
    "upgrade")
-      while getopts :hcfdsi:e:E: opt; do
+      while getopts :hcpfdsi:e:E: opt; do
          case $opt in
          h) usage $action ;;
          c) NOCTBL=1 ;;
          f) FORCE=1 ;;
+         p) PARALLEL=1 ;;
          s) DRYRUN=1 ;;
          d) DOWNLOAD=1 ;;
          i) ctincl=( ${OPTARG//,/ } ) ;;
@@ -561,6 +615,10 @@ arguments() {
    ;;
    *) echo "Unknown action $action"; usage ;;
    esac
+   if test "$PARALLEL" = "1"; then
+      test "${main[parallelhost]}" != "" && PARHOST=${main[parallelhost]} || PARHOST=4
+      test "${main[parallelct]}" != "" && PARCT=${main[parallelct]} || PARCT=2
+   fi
 }
 
 main() {
@@ -571,6 +629,8 @@ main() {
    DOWNLOAD=0
    UPDATE=0
    QUIET=0
+   PARHOST=1
+   PARCT=1
    CFG=~/.updates.ini
 
    ! test -d "$CACHE" && mkdir "$CACHE"
