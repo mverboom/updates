@@ -558,7 +558,13 @@ arguments() {
       done
       shift $((OPTIND-1))
       test $# -ne 0 && hosts=( "$@" )
-      test "${#hosts[*]}" -eq 0 && hosts=( "${allhosts[@]}" )
+      if test "${#hosts[*]}" -eq 0; then
+         hosts=( "${allhosts[@]}" )
+      else
+         for host in ${hosts[@]}; do
+            [[ ! " ${allhosts[@]} " =~ " ${host} " ]] && { echo "Host ${host} not part of all hosts."; exit 1; }
+         done
+      fi
    ;;
    "check-list")
       while getopts :hHC opt; do
@@ -603,7 +609,13 @@ arguments() {
       done
       shift $((OPTIND-1))
       test $# -ne 0 && hosts=( "$@" )
-      test "${#hosts[*]}" -eq 0 && hosts=( "${allhosts[@]}" )
+      if test "${#hosts[*]}" -eq 0; then
+         hosts=( "${allhosts[@]}" )
+      else
+         for host in ${hosts[@]}; do
+            [[ ! " ${allhosts[@]} " =~ " ${host} " ]] && { echo "Host ${host} not part of all hosts."; exit 1; }
+         done
+      fi
    ;;
    "upgrade-report")
       while getopts :hfp:i:e:E: opt; do
