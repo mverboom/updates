@@ -83,12 +83,14 @@ check-render-host() {
    $output "$h" "$host ($stamp)"
    unset p1 p2
    test "${#updates_avail[*]}" -gt 0 && local p1="${#updates_avail[*]} updates"
-   test "${#updates_hold[*]}" -gt 0 && local p2="${#updates_hold[*]} hold"
+   test "${#updates_hold[*]}" -gt 0 -a "$reporthold" != "off" && local p2="${#updates_hold[*]} hold"
    test "$p1" != "" -a "$p2" != "" && $output foldstart "$p1/$p2" || $output foldstart "$p1$p2"
    $output t_head Package "Current version" "New version" Source
-   for pkg in ${updates_hold[*]}; do
-      $output t_line "$pkg (on hold)" "${updates_curver[$pkg]}" "${updates_newver[$pkg]}" "${updates_newversrc[$pkg]}"
-   done
+   if test "$reporthold" != "off"; then
+      for pkg in ${updates_hold[*]}; do
+         $output t_line "$pkg (on hold)" "${updates_curver[$pkg]}" "${updates_newver[$pkg]}" "${updates_newversrc[$pkg]}"
+      done
+   fi
    for pkg in ${updates_avail[*]}; do
       $output t_line "$pkg" "${updates_curver[$pkg]}" "${updates_newver[$pkg]}" "${updates_newversrc[$pkg]}"
    done
@@ -455,6 +457,7 @@ usage() {
    "upgrade") echo "$0 $1 <options> [host fqdn..]"
       echo
       echo "When specifying a host, the fqdn should be used."
+      echo "When no host(s) are specified, a full host list will be used."
       echo
       echo "Options:"
       echo "   -h            This help."
@@ -600,7 +603,7 @@ arguments() {
       done
       shift $((OPTIND-1))
       test $# -ne 0 && hosts=( "$@" )
-      test "${#hosts[*]}" -eq 0 && { echo "No hosts are specified."; usage $action; }
+      test "${#hosts[*]}" -eq 0 && hosts=( "${allhosts[@]}" )
    ;;
    "upgrade-report")
       while getopts :hfp:i:e:E: opt; do
