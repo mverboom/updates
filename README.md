@@ -44,49 +44,49 @@ sections that configure the script.
 
 In section main, the following configuration keywords are available.
 
-'''wikiprofile'''
+```wikiprofile```
 
 Name of the profile to use when publishing information on a wiki. The profile points
 to the profile configuration as defined for libwiki.
 
-'''checkreport'''
+```checkreport```
 
 The value of this option is the name of the page to use when generating a report for
 available updates on hosts and publishing it on a wiki.
 
 
-'''upgradereport'''
+```upgradereport```
 
 The value of this option is the name of the page to use when generating a report for
 upgrade results for hosts and publishing it on a wiki.
 
-'''allhostslist'''
+```allhostslist```
 
 This is a space seperated list of hosts. When not specifying hosts on the commandline
 this list will be used as a definition of all hosts.
 
-'''allhostscmd'''
+```allhostscmd```
 
 As an alternative to the statically defined allhostslist the value of this key is executed
 and the result is used as the value for the all hosts definition.
 
-'''upgradeblacklist'''
+```upgradeblacklist```
 
 This is a space seperated list of hosts that should not be upgraded. This list is compared
 against host names and container names.
 
-'''upgradeblacklistcmd'''
+```upgradeblacklistcmd```
 
 As an alternative to the statically defined upgradeblacklist the value of this key is
 executed and the result is used as the value for the upgrade blacklist.
 
-'''parallelhost'''
+```parallelhost```
 
 When parallelism is enabled, the amount of hosts that should be run in parallel. This is
 seperate from the amount of parallelism for containers on the specific host. If this is
 not specified and parallelism is enabled, the value defaults to 4.
 
-'''parallelct'''
+```parallelct```
 
 When parallelism is enabled, the amount of containers on a host that should be run in
 parallel. If this is not specified and parallelism is enabled, the value defaults to 2.
