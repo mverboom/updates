@@ -34,7 +34,7 @@ makesection() {
          ctreport=$(mktemp)
          ctcount=0
          for ct in "${cts[@]}"; do
-            if test ! -z "$cache/$host/$ct"; then 
+            if test ! -z "$cache/$host/$ct"; then
                $render "$cache/$host/$ct" >> "$ctreport" && ctcount=$(( ctcount + 1 ))
             fi
          done
@@ -500,6 +500,7 @@ readconfig() {
    local section
    local cfg
 
+   CFG=$(realpath $CFG)
    ! test -e $CFG && { echo "Config file $CFG does not exist."; exit 1; }
    test $(stat -c %a $CFG) -gt 600 && { echo "Unsafe permissions on config file $CFG."; exit 1; }
 
