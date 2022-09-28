@@ -304,7 +304,7 @@ upgrade-host() {
       fi
    fi
 
-   test "${ctexcl[0]}" = "all" && { println "%done/$num done"; return; }
+   test "${ctexcl[0]}" = "all" && { println "$done/$num done"; return; }
    updates list-containers "$host"
    test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
    ctdone=0
