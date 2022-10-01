@@ -421,6 +421,15 @@ upgrade-report() {
 
 usage() {
    case "$1" in
+   "list") echo "$0 $1 <options>"
+      echo
+      echo "List hosts"
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      echo "   -a            List all hosts."
+      echo "   -b            List all blacklisted hosts."
+      ;;
    "check") echo "$0 $1 <options> [host fqdn..]"
       echo
       echo "When specifying a host, the fqdn should be used."
@@ -479,6 +488,7 @@ usage() {
    *) echo "$0 [options..] <action> [option(s)...]"
       echo
       echo "Action:"
+      echo "  list            List hosts."
       echo "  check           Check hosts for updates."
       echo "  check-report    Generate hosts with updates report."
       echo "  check-list      Generate list of hosts with pending updates."
@@ -543,6 +553,20 @@ arguments() {
    OPTIND=1
 
    case "$action" in
+   "list")
+      main[list]=all
+      while getopts :hab opt; do
+         case $opt in
+         h) usage $action;;
+         a) main[list]=all;;
+         b) main[list]=black;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+   ;;
    "check")
       while getopts :hfpui:e:E: opt; do
          case $opt in
@@ -637,6 +661,17 @@ arguments() {
    fi
 }
 
+list() {
+   case "${main[list]}" in
+   all)
+      printf "%s\n" ${allhosts[@]}
+   ;;
+   black)
+      printf "%s\n" ${blacklist[@]}
+   ;;
+   esac
+}
+
 main() {
    CACHE="$HOME/.updates.cache"
    MAXCACHEAGE=6000
@@ -655,6 +690,9 @@ main() {
 
    wiki profile "${main[wikiprofile]}" || { echo "Unable to open wiki ($(wiki error))"; exit 1; }
    case "$action" in
+   "list")
+      list
+   ;;
    "check")
       check "${hosts[@]}"
    ;;
