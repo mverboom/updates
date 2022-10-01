@@ -17,7 +17,7 @@ makesection() {
    cache="$1"; shift
    title="$1"; shift
 
-   frmt new frmtreport $(wiki type)
+   frmt new frmtreport ${outputformat}
    frmtreport h1 "$title"
    frmtreport del
    done=0
@@ -40,11 +40,11 @@ makesection() {
          done
          if test "$ctcount" -gt 0; then
             if test ! -f "$cache/$host/$host" ; then
-               frmt new hostreport $(wiki type)
+               frmt new hostreport ${outputformat}
                hostreport h2 "$host"
                hostreport del
             fi
-            frmt new frmtreport $(wiki type)
+            frmt new frmtreport ${outputformat}
             frmtreport foldstart "${ctcount} containers"
             cat "$ctreport"
             frmtreport foldend
@@ -106,8 +106,7 @@ check-report-hosts() {
    . "$src"
 
    test "$reporthold" = "off" -a "${#updates_avail[*]}" -eq 0 && return 1
-
-   frmt new checkrender $(wiki type)
+   frmt new checkrender ${outputformat}
    if test "$ctname" == ""; then
       check-render-host checkrender h2 "$host"
    else
@@ -121,17 +120,18 @@ check-report() {
    local systems
    local cache="$CACHE/updates"
 
-   wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; }
-   report=$(mktemp)
-   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$report"
+   test "$report" = "" && { wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; } }
+   reportoutput=$(mktemp)
+   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
       [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
       [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
-      makesection check-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$report"
+      makesection check-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$reportoutput"
    done
-   wiki save "${main[checkreport]}" - < "$report" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; }
-   rm -f "$report"
+   test "$report" = "" && { wiki save "${main[checkreport]}" - < "$reportoutput" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; } }
+   test "$report" != "" && cat "$reportoutput"
+   rm -f "$reportoutput"
 }
 
 check-save() {
@@ -393,7 +393,7 @@ upgrade-report-hosts() {
    unset host date ret ctname ctid updates_output
    . "$src"
 
-   frmt new upgraderender $(wiki type)
+   frmt new upgraderender ${outputformat}
    if test "$ctname" == ""; then
       upgrade-render-host upgraderender h2 "$host" "$ret"
    else
@@ -406,17 +406,18 @@ upgrade-report() {
    local systems
    local cache="$CACHE/upgrades"
 
-   wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; }
-   report=$(mktemp)
-   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$report"
+   test "$report" = "" && { wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; } }
+   reportoutput=$(mktemp)
+   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
       [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
       [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
-      makesection upgrade-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$report"
+      makesection upgrade-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$reportoutput"
    done
-   wiki save "${main[upgradereport]}" - < "$report" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; }
-   rm -f "$report"
+   test "$report" = "" && { wiki save "${main[upgradereport]}" - < "$reportoutput" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; } }
+   test "$report" != "" && cat "$reportoutput"
+   rm -f "$reportoutput"
 }
 
 usage() {
@@ -461,6 +462,8 @@ usage() {
       echo "Options:"
       echo "   -h            This help."
       echo "   -H            Exclude packages on hold from report."
+      echo "   -a            Force ascii report to stdout."
+      echo "   -w            Force html report to stdout."
       echo "   -p <page>     Name of the page to upload to (defaults to ${main[checkreport]})."
       ;;
    "upgrade") echo "$0 $1 <options> [host fqdn..]"
@@ -483,6 +486,8 @@ usage() {
       echo
       echo "Options:"
       echo "   -h            This help."
+      echo "   -a            Force ascii report to stdout."
+      echo "   -w            Force html report to stdout."
       echo "   -p <page>     Name of the page to upload to (defaults to ${main[upgradereport]})."
       ;;
    *) echo "$0 [options..] <action> [option(s)...]"
@@ -605,11 +610,13 @@ arguments() {
       test $# -ne 0 && hosts=( "$@" )
    ;;
    "check-report")
-      while getopts :hHfp:i:e:E: opt; do
+      while getopts :hHfp:i:e:E:aw opt; do
          case $opt in
          h) usage $action;;
          H) reporthold=off;;
          p) main[checkreport]="$OPTARG" ;;
+         w) report=html;;
+         a) report=ascii;;
          \?) echo "Unknown option: -$OPTARG"; usage $action;;
          :) echo "Option -$OPTARG requires argument"; usage $action;;
          esac
@@ -643,10 +650,12 @@ arguments() {
       fi
    ;;
    "upgrade-report")
-      while getopts :hfp:i:e:E: opt; do
+      while getopts :hfp:i:e:E:aw opt; do
          case $opt in
          h) usage $action;;
          p) main[upgradereport]="$OPTARG" ;;
+         w) report=html;;
+         a) report=ascii;;
          \?) echo "Unknown option: -$OPTARG"; usage $action;;
          :) echo "Option -$OPTARG requires argument"; usage $action;;
          esac
@@ -689,6 +698,8 @@ main() {
    arguments "$@"
 
    wiki profile "${main[wikiprofile]}" || { echo "Unable to open wiki ($(wiki error))"; exit 1; }
+   outputformat=$( wiki type )
+   test "$report" != "" && outputformat="$report"
    case "$action" in
    "list")
       list
