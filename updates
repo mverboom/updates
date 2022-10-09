@@ -17,14 +17,13 @@ makesection() {
    cache="$1"; shift
    title="$1"; shift
 
-   frmt new frmtreport ${outputformat}
-   frmtreport h1 "$title"
-   frmtreport del
+   sectionreport=$(mktemp)
+
    done=0
    num="$#"
    for host in "$@"; do
       if test -f "$cache/$host/$host"; then
-         $render "$cache/$host/$host"
+         $render "$cache/$host/$host" >> "$sectionreport"
       fi
 
       unset cts
@@ -41,18 +40,26 @@ makesection() {
          if test "$ctcount" -gt 0; then
             if test ! -f "$cache/$host/$host" ; then
                frmt new hostreport ${outputformat}
-               hostreport h2 "$host"
+               hostreport h2 "$host" >> "$sectionreport"
                hostreport del
             fi
             frmt new frmtreport ${outputformat}
             frmtreport foldstart "${ctcount} containers"
-            cat "$ctreport"
+            cat "$ctreport" >> "$sectionreport"
             frmtreport foldend
             frmtreport del
          fi
          rm -f "$ctreport"
       fi
    done
+
+   if test -s "$sectionreport"; then
+      frmt new frmtreport ${outputformat}
+      frmtreport h1 "$title"
+      frmtreport del
+      cat "$sectionreport"
+   fi
+   rm -f "$sectionreport"
 }
 
 verifycache() {
@@ -105,6 +112,8 @@ check-report-hosts() {
    unset host date ctname ctid updates_avail updates_hold updates_curver updates_newver updates_newversrc
    . "$src"
 
+   test "$date" -lt "$reportafter" && return 1
+
    test "$reporthold" = "off" -a "${#updates_avail[*]}" -eq 0 && return 1
    frmt new checkrender ${outputformat}
    if test "$ctname" == ""; then
@@ -122,7 +131,7 @@ check-report() {
 
    test "$report" = "" && { wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; } }
    reportoutput=$(mktemp)
-   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$reportoutput"
+   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" > "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
       [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
@@ -393,6 +402,8 @@ upgrade-report-hosts() {
    unset host date ret ctname ctid updates_output
    . "$src"
 
+   test "$date" -lt "$reportafter" && return 1
+
    frmt new upgraderender ${outputformat}
    if test "$ctname" == ""; then
       upgrade-render-host upgraderender h2 "$host" "$ret"
@@ -408,7 +419,7 @@ upgrade-report() {
 
    test "$report" = "" && { wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; } }
    reportoutput=$(mktemp)
-   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S")" > "$reportoutput"
+   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" > "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
       [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
@@ -464,6 +475,7 @@ usage() {
       echo "   -H            Exclude packages on hold from report."
       echo "   -a            Force ascii report to stdout."
       echo "   -w            Force html report to stdout."
+      echo "   -A <date>     Report reqults newer than date. Defaults to today at 0:00."
       echo "   -p <page>     Name of the page to upload to (defaults to ${main[checkreport]})."
       ;;
    "upgrade") echo "$0 $1 <options> [host fqdn..]"
@@ -488,6 +500,7 @@ usage() {
       echo "   -h            This help."
       echo "   -a            Force ascii report to stdout."
       echo "   -w            Force html report to stdout."
+      echo "   -A <date>     Report reqults newer than date. Defaults to today at 0:00."
       echo "   -p <page>     Name of the page to upload to (defaults to ${main[upgradereport]})."
       ;;
    *) echo "$0 [options..] <action> [option(s)...]"
@@ -610,13 +623,14 @@ arguments() {
       test $# -ne 0 && hosts=( "$@" )
    ;;
    "check-report")
-      while getopts :hHfp:i:e:E:aw opt; do
+      while getopts :hHfp:i:e:E:awA: opt; do
          case $opt in
          h) usage $action;;
          H) reporthold=off;;
          p) main[checkreport]="$OPTARG" ;;
          w) report=html;;
          a) report=ascii;;
+         A) reportafter=$( date -d "${OPTARG}" "+%s" );;
          \?) echo "Unknown option: -$OPTARG"; usage $action;;
          :) echo "Option -$OPTARG requires argument"; usage $action;;
          esac
@@ -650,12 +664,13 @@ arguments() {
       fi
    ;;
    "upgrade-report")
-      while getopts :hfp:i:e:E:aw opt; do
+      while getopts :hfp:i:e:E:awA: opt; do
          case $opt in
          h) usage $action;;
          p) main[upgradereport]="$OPTARG" ;;
          w) report=html;;
          a) report=ascii;;
+         A) reportafter=$( date -d "${OPTARG}" "+%s" );;
          \?) echo "Unknown option: -$OPTARG"; usage $action;;
          :) echo "Option -$OPTARG requires argument"; usage $action;;
          esac
@@ -689,6 +704,7 @@ main() {
    DOWNLOAD=0
    UPDATE=0
    QUIET=0
+   reportafter=$( date -d "today 0:0:0" "+%s" )
    PARHOST=1
    PARCT=1
    CFG=~/.updates.ini
