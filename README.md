@@ -186,6 +186,15 @@ published on a wiki.
 
 ```updates check-report```
 
+Per default the report generated will include items that were updated today
+from 0:00. This time can be changed if required.
+
+```updates check-report -A "yesterday 12:00:00"```
+
+The output can also be send to stdout in either html or ascii format.
+
+```updates check-report -a```
+
 If there are systems with packages that are marked on-hold, these can be
 excluded in order to make the report more focussed on any updates that can
 be installed:
@@ -249,3 +258,13 @@ This indicates the command to run the upgraded exited ok, but one or more pacakg
 requested information on what to do with a specific configuration file. Per default
 the action is to not change any configuration file. This usually is the safest
 option, but could in some cases give undesired results.
+
+Per default the report generated will include items that were upgraded today
+from 0:00. This time can be changed if required.
+
+```updates upgrade-report -A "yesterday 12:00:00"```
+
+The output can also be send to stdout in either html or ascii format.
+
+```updates upgrade-report -a```
+
