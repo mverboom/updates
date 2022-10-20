@@ -388,6 +388,7 @@ upgrade-render-host() {
    [[ " ${updates_output[*]} " =~ " Configuration file " ]] && state="CONFIG CHANGE"
    test "$ret" != "0" && state="FAIL"
    $output "$h" "$host ($state) ($stamp)"
+   test "$reportskip" = "1" && return
    $output foldstart "Output ${#updates_output[*]} lines"
    for line in "${updates_output[@]}"; do
       $output pre "$line"
@@ -403,6 +404,7 @@ upgrade-report-hosts() {
    . "$src"
 
    test "$date" -lt "$reportafter" && return 1
+   test "$reporterr" = "1" -a "$ret" = "0" && return 1
 
    frmt new upgraderender ${outputformat}
    if test "$ctname" == ""; then
@@ -500,6 +502,8 @@ usage() {
       echo "   -h            This help."
       echo "   -a            Force ascii report to stdout."
       echo "   -w            Force html report to stdout."
+      echo "   -e            Report results with error (not ok) state only."
+      echo "   -s            Skip upgrade command output."
       echo "   -A <date>     Report reqults newer than date. Defaults to today at 0:00."
       echo "   -p <page>     Name of the page to upload to (defaults to ${main[upgradereport]})."
       ;;
@@ -664,12 +668,14 @@ arguments() {
       fi
    ;;
    "upgrade-report")
-      while getopts :hfp:i:e:E:awA: opt; do
+      while getopts :hefp:i:e:E:aswA: opt; do
          case $opt in
          h) usage $action;;
+         e) reporterr=1;;
          p) main[upgradereport]="$OPTARG" ;;
          w) report=html;;
          a) report=ascii;;
+         s) reportskip=1;;
          A) reportafter=$( date -d "${OPTARG}" "+%s" );;
          \?) echo "Unknown option: -$OPTARG"; usage $action;;
          :) echo "Option -$OPTARG requires argument"; usage $action;;
