@@ -44,8 +44,8 @@ makesection() {
                hostreport del
             fi
             frmt new frmtreport ${outputformat}
-            frmtreport foldstart "${ctcount} containers"
-            cat "$ctreport" >> "$sectionreport"
+            frmtreport foldstart "${ctcount} containers" >> "$sectionreport"
+            cat "$ctreport" >> "$sectionreport" >> "$sectionreport"
             frmtreport foldend
             frmtreport del
          fi
