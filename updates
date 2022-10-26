@@ -22,8 +22,9 @@ makesection() {
    done=0
    num="$#"
    for host in "$@"; do
+      hostrender=0
       if test -f "$cache/$host/$host"; then
-         $render "$cache/$host/$host" >> "$sectionreport"
+         $render "$cache/$host/$host" >> "$sectionreport" && hostrender=1
       fi
 
       unset cts
@@ -38,7 +39,7 @@ makesection() {
             fi
          done
          if test "$ctcount" -gt 0; then
-            if test ! -f "$cache/$host/$host" ; then
+            if test "$hostrender" = "0" ; then
                frmt new hostreport ${outputformat}
                hostreport h2 "$host" >> "$sectionreport"
                hostreport del
@@ -46,7 +47,7 @@ makesection() {
             frmt new frmtreport ${outputformat}
             frmtreport foldstart "${ctcount} containers" >> "$sectionreport"
             cat "$ctreport" >> "$sectionreport" >> "$sectionreport"
-            frmtreport foldend
+            frmtreport foldend >> "$sectionreport"
             frmtreport del
          fi
          rm -f "$ctreport"
