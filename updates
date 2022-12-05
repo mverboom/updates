@@ -434,6 +434,36 @@ upgrade-report() {
    rm -f "$reportoutput"
 }
 
+println() {
+   test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
+}
+
+snapshot-list() {
+   for host in ${hosts[@]}; do
+      test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn."; return; }
+      updates is-container "$host" && { println "Skipping host ${host}, is a container."; return; }
+      updates list-containers "$host"
+      test "${#containers[*]}" -eq 0 && continue
+      ctdone=0
+      for ctid in "${!containers[@]}"; do
+         updates list-snapshots "$host" "$ctid" && { test "${#snapshots[*]}" -gt 0 && echo "${host} ${ctid} ${snapshots[*]}"; }
+      done
+   done
+}
+
+snapshot-rm() {
+   for host in ${hosts[@]}; do
+      test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn."; return; }
+      updates is-container "$host" && { println "Skipping host ${host}, is a container."; return; }
+      updates list-containers "$host"
+      test "${#containers[*]}" -eq 0 && continue
+      ctdone=0
+      for ctid in "${!containers[@]}"; do
+         updates del-snapshots "$host" "$ctid" || { println "Error removing snapshots for ${host} container ${ctid}."; }
+      done
+   done
+}
+
 usage() {
    case "$1" in
    "list") echo "$0 $1 <options>"
@@ -508,6 +538,23 @@ usage() {
       echo "   -A <date>     Report reqults newer than date. Defaults to today at 0:00."
       echo "   -p <page>     Name of the page to upload to (defaults to ${main[upgradereport]})."
       ;;
+   "snapshot-list") echo "$0 $1 <options> [host fqdn..]"
+      echo
+      echo "When specifying a host, the fqdn should be used."
+      echo "When no host(s) are specified, all hosts in cache will be used."
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      ;;
+   "snapshot-rm") echo "$0 $1 <options> [host fqdn..]"
+      echo
+      echo "When specifying a host, the fqdn should be used."
+      echo "When no host(s) are specified, all hosts in cache will be used."
+      echo
+      echo "Options:"
+      echo "   -h            This help."
+      ;;
+
    *) echo "$0 [options..] <action> [option(s)...]"
       echo
       echo "Action:"
@@ -517,6 +564,8 @@ usage() {
       echo "  check-list      Generate list of hosts with pending updates."
       echo "  upgrade         Upgrade specified host(s)."
       echo "  upgrade-report  Generate upgrade report."
+      echo "  snapshot-list   Generate list of snapshots."
+      echo "  snapshot-rm     Remote snapshots."
       echo
       echo "Options:"
       echo "   -c <cfg file>  Config file (defaults to $CFG)."
@@ -684,6 +733,29 @@ arguments() {
       done
       shift $((OPTIND-1))
    ;;
+   "snapshot-list")
+      while getopts :h opt; do
+         case $opt in
+         h) usage $action;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+   ;;
+   "snapshot-rm")
+      while getopts :h opt; do
+         case $opt in
+         h) usage $action;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+   ;;
+
    *) echo "Unknown action $action"; usage ;;
    esac
    if test "$PARALLEL" = "1"; then
@@ -741,6 +813,12 @@ main() {
    ;;
    "upgrade-report")
       upgrade-report
+   ;;
+   "snapshot-list")
+      snapshot-list "${hosts[@]}"
+   ;;
+   "snapshot-rm")
+      snapshot-rm "${hosts[@]}"
    ;;
    *) echo "Unknown action $action"; usage ;;
    esac
