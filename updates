@@ -743,6 +743,13 @@ arguments() {
       done
       shift $((OPTIND-1))
       test $# -ne 0 && hosts=( "$@" )
+      if test "${#hosts[*]}" -eq 0; then
+         hosts=( "${allhosts[@]}" )
+      else
+         for host in ${hosts[@]}; do
+            [[ ! " ${allhosts[@]} " =~ " ${host} " ]] && { echo "Host ${host} not part of all hosts."; exit 1; }
+         done
+      fi
    ;;
    "snapshot-rm")
       while getopts :h opt; do
@@ -754,6 +761,13 @@ arguments() {
       done
       shift $((OPTIND-1))
       test $# -ne 0 && hosts=( "$@" )
+      if test "${#hosts[*]}" -eq 0; then
+         hosts=( "${allhosts[@]}" )
+      else
+         for host in ${hosts[@]}; do
+            [[ ! " ${allhosts[@]} " =~ " ${host} " ]] && { echo "Host ${host} not part of all hosts."; exit 1; }
+         done
+      fi
    ;;
 
    *) echo "Unknown action $action"; usage ;;
