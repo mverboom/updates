@@ -40,11 +40,11 @@ makesection() {
          done
          if test "$ctcount" -gt 0; then
             if test "$hostrender" = "0" ; then
-               frmt new hostreport ${outputformat}
+               frmt new hostreport ${outputformat} -b
                hostreport h2 "$host" >> "$sectionreport"
                hostreport del
             fi
-            frmt new frmtreport ${outputformat}
+            frmt new frmtreport ${outputformat} -b
             frmtreport foldstart "${ctcount} containers" >> "$sectionreport"
             cat "$ctreport" >> "$sectionreport" >> "$sectionreport"
             frmtreport foldend >> "$sectionreport"
@@ -55,7 +55,7 @@ makesection() {
    done
 
    if test -s "$sectionreport"; then
-      frmt new frmtreport ${outputformat}
+      frmt new frmtreport ${outputformat} -b
       frmtreport h1 "$title"
       frmtreport del
       cat "$sectionreport"
@@ -116,7 +116,7 @@ check-report-hosts() {
    test "$date" -lt "$reportafter" && return 1
 
    test "$reporthold" = "off" -a "${#updates_avail[*]}" -eq 0 && return 1
-   frmt new checkrender ${outputformat}
+   frmt new checkrender ${outputformat} -b
    if test "$ctname" == ""; then
       check-render-host checkrender h2 "$host"
    else
@@ -132,13 +132,15 @@ check-report() {
 
    test "$report" = "" && { wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; } }
    reportoutput=$(mktemp)
-   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" > "$reportoutput"
+   frmt new checkreport ${outputformat} > "$reportoutput"
+   checkreport print "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" >> "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
       [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
       [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
       makesection check-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$reportoutput"
    done
+   checkreport del >> "$reportoutput"
    test "$report" = "" && { wiki save "${main[checkreport]}" - < "$reportoutput" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; } }
    test "$report" != "" && cat "$reportoutput"
    rm -f "$reportoutput"
@@ -199,7 +201,7 @@ check-host() {
    fi
 
    test "${ctexcl[0]}" = "all" && { println "$done/$num done"; return; }
-   updates list-containers "$host"
+   updates container-list "$host"
    test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
    ctdone=0
    for ctid in "${!containers[@]}"; do
@@ -315,7 +317,7 @@ upgrade-host() {
    fi
 
    test "${ctexcl[0]}" = "all" && { println "$done/$num done"; return; }
-   updates list-containers "$host"
+   updates container-list "$host"
    test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
    ctdone=0
    for ctid in "${!containers[@]}"; do
@@ -407,7 +409,7 @@ upgrade-report-hosts() {
    test "$date" -lt "$reportafter" && return 1
    test "$reporterr" = "1" -a "$ret" = "0" && return 1
 
-   frmt new upgraderender ${outputformat}
+   frmt new upgraderender ${outputformat} -b
    if test "$ctname" == ""; then
       upgrade-render-host upgraderender h2 "$host" "$ret"
    else
@@ -438,29 +440,151 @@ println() {
    test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
 }
 
-snapshot-list() {
-   for host in ${hosts[@]}; do
-      test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn."; return; }
-      updates is-container "$host" && { println "Skipping host ${host}, is a container."; return; }
-      updates list-containers "$host"
-      test "${#containers[*]}" -eq 0 && continue
-      ctdone=0
-      for ctid in "${!containers[@]}"; do
-         updates list-snapshots "$host" "$ctid" && { test "${#snapshots[*]}" -gt 0 && echo "${host} ${ctid} ${snapshots[*]}"; }
-      done
-   done
+snapshot-rm() {
+   local cache="$1"
+   local host="$2"
+   local ctid="$3"
+
+   test "$ctid" = "" && return
+   rm -f "$cache"
+   updates snapshot-rm "$host" "$ctid" ${snapfilter[@]}
+   if test "$?" -eq 0 -a "${#snapshots[*]}" -gt 0; then
+      local date=$(date "+%s")
+      local ctname="${containers[$ctid]}"
+      {
+         declare -p host date | sed 's/ --/ -g/'
+         test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
+         test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
+         declare -p snapshots | sed 's/ -[aA]/&g/'
+      } > "$cache"
+   else
+      return 1
+   fi
+   return 0
 }
 
-snapshot-rm() {
-   for host in ${hosts[@]}; do
-      test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn."; return; }
-      updates is-container "$host" && { println "Skipping host ${host}, is a container."; return; }
-      updates list-containers "$host"
-      test "${#containers[*]}" -eq 0 && continue
-      ctdone=0
-      for ctid in "${!containers[@]}"; do
-         updates del-snapshots "$host" "$ctid" || { println "Error removing snapshots for ${host} container ${ctid}."; }
-      done
+snapshot-list() {
+   local cache="$1"
+   local host="$2"
+   local ctid="$3"
+
+   test "$ctid" = "" && return
+   rm -f "$cache"
+   updates snapshot-list "$host" "$ctid" ${snapfilter[@]} 
+   if test "$?" -eq 0 -a "${#snapshots[*]}" -gt 0; then
+      local date=$(date "+%s")
+      local ctname="${containers[$ctid]}"
+      {
+         declare -p host date | sed 's/ --/ -g/'
+         test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
+         test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
+         declare -p snapshots | sed 's/ -[aA]/&g/'
+      } > "$cache"
+   else
+      return 1
+   fi
+   return 0
+}
+
+runcontainer() {
+   local action="$1"; shift
+   local ctname="${containers[$ctid]}"
+   local cache="$cache/$ctname"
+
+   "$action" "$cache" "$host" "$ctid"
+}
+
+runhost() {
+   local action="$1"; shift
+   local line="$1"; shift
+   local jobs="$PARCT"
+   local checkhost dstfile
+   declare -a running runningct
+   unset ctname ctid
+   local slot=0
+   local checkhost=1
+   local cache="$cache/$host"
+
+   test ! -d "$cache" && mkdir -p "$cache"
+
+   [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
+   [[ " ${blacklist[@]} " =~ " ${host} " ]] && test "$NOCTBL" != 1 && return
+   [[ " ${blacklist[@]} " =~ " ${host} " ]] && checkhost=0
+   test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn.\n"; return; }
+   updates is-container "$host" && { println "Skipping host ${host}, is a container.\n"; return; }
+   println "$done/$num $host" >&2
+
+   test "$checkhost" -eq 1 && $action "$cache/$host/$host" "$host"
+
+   test "${ctexcl[0]}" = "all" && { println "$done/$num done"; return; }
+   updates container-list "$host"
+   test "${#containers[*]}" -eq 0 && { println "$done/$num done"; return; }
+   ctdone=0
+   for ctid in "${!containers[@]}"; do
+      local ctname="${containers[$ctid]}"
+      [[ " ${ctexcl[@]} " =~ " ${ctid} " ]] && continue
+      test "${#ctincl[*]}" -gt 0 && [[ ! " ${ctincl[@]} " =~ " ${ctid} " ]] && continue
+      [[ " ${blacklist[@]} " =~ " ${ctname} " ]] && continue
+
+      runcontainer "$action" &
+      running[$slot]="$!"
+      runningct[$slot]="$ctid"
+      ctdone=$(( ctdone + 1 ))
+      println "$done/$num $host, ct: ${runningct[*]// /,} ($ctdone/${#containers[@]})" >&2
+      if test "${#running[*]}" -eq $jobs; then
+         wait -p pid -n ${running[*]}
+         for slot in ${!running[@]}; do
+            test "${running[$slot]}" = "$pid" && break
+         done
+         unset 'running[slot]'
+         unset 'runningct[slot]'
+      else
+         slot=$(( slot + 1 ))
+      fi
+   done
+   wait
+   println "$done/$num done"
+}
+
+# runaction <action> <cache dir name>
+runaction() {
+   local done=0
+   local opts
+   declare -a opts
+   local jobs="$PARHOST"
+   declare -a running
+   local slot=0
+   local newslot=0
+   local maxslot=0
+   local action="$1"; shift
+   local cache="$CACHE/$1"; shift
+   num=$#
+
+   # opts array needs to be filled
+
+   test "$#" -lt "$jobs" && jobs="$#"
+   test ! -d "$cache" && mkdir -p "$cache"
+
+   test "$QUIET" -eq 0 && printf '%.0s\n' $(seq 1 $jobs)
+   for host in "$@"; do
+      done=$(( done + 1 ))
+      newslot=$(( jobs - slot ))
+      runhost "$action" "$newslot" &
+      test "$newslot" -gt "$maxslot" && maxslot="$newslot"
+      running[$slot]="$!"
+      if test "${#running[*]}" -eq $jobs; then
+         wait -p pid -n ${running[*]}
+         for slot in ${!running[@]}; do
+            test "${running[$slot]}" = "$pid" && break
+         done
+         unset 'running[slot]'
+      else
+         slot=$(( slot + 1 ))
+      fi
+   done
+   wait
+   test "$QUIET" -eq 0 && for l in $(seq 1 $maxslot); do
+      printf "\e[%dA\e[K\r" "1"
    done
 }
 
@@ -542,9 +666,13 @@ usage() {
       echo
       echo "When specifying a host, the fqdn should be used."
       echo "When no host(s) are specified, all hosts in cache will be used."
+      echo "Default outputs list of hosts with snapshots."
       echo
       echo "Options:"
+      echo "   -f <filter>   Show only snapshots starting with filter value."
+      echo "   -p            Enable parallelism."
       echo "   -h            This help."
+      echo "   -w            Force html report to stdout."
       ;;
    "snapshot-rm") echo "$0 $1 <options> [host fqdn..]"
       echo
@@ -552,7 +680,10 @@ usage() {
       echo "When no host(s) are specified, all hosts in cache will be used."
       echo
       echo "Options:"
+      echo "   -f <filter>   Remove only snapshots starting with filter value."
+      echo "   -p            Enable parallelism."
       echo "   -h            This help."
+      echo "   -w            Force html report to stdout."
       ;;
 
    *) echo "$0 [options..] <action> [option(s)...]"
@@ -734,8 +865,12 @@ arguments() {
       shift $((OPTIND-1))
    ;;
    "snapshot-list")
-      while getopts :h opt; do
+      report=ascii
+      while getopts :hpwf: opt; do
          case $opt in
+         f) snapfilter=( "-f" "$OPTARG" ) ;;
+         w) report=html;;
+         p) PARALLEL=1 ;;
          h) usage $action;;
          \?) echo "Unknown option: -$OPTARG"; usage $action;;
          :) echo "Option -$OPTARG requires argument"; usage $action;;
@@ -752,6 +887,28 @@ arguments() {
       fi
    ;;
    "snapshot-rm")
+      report=ascii
+      while getopts :hpwf: opt; do
+         case $opt in
+         f) snapfilter=( "-f" "$OPTARG" ) ;;
+         w) report=html;;
+         p) PARALLEL=1 ;;
+         h) usage $action;;
+         \?) echo "Unknown option: -$OPTARG"; usage $action;;
+         :) echo "Option -$OPTARG requires argument"; usage $action;;
+         esac
+      done
+      shift $((OPTIND-1))
+      test $# -ne 0 && hosts=( "$@" )
+      if test "${#hosts[*]}" -eq 0; then
+         hosts=( "${allhosts[@]}" )
+      else
+         for host in ${hosts[@]}; do
+            [[ ! " ${allhosts[@]} " =~ " ${host} " ]] && { echo "Host ${host} not part of all hosts."; exit 1; }
+         done
+      fi
+   ;;
+   "test")
       while getopts :h opt; do
          case $opt in
          h) usage $action;;
@@ -759,6 +916,7 @@ arguments() {
          :) echo "Option -$OPTARG requires argument"; usage $action;;
          esac
       done
+      PARALLEL=1
       shift $((OPTIND-1))
       test $# -ne 0 && hosts=( "$@" )
       if test "${#hosts[*]}" -eq 0; then
@@ -802,6 +960,8 @@ main() {
    PARCT=1
    CFG=~/.updates.ini
 
+   test "$UPDATESCFG" != "" && CFG="$UPDATESCFG"
+
    ! test -d "$CACHE" && mkdir "$CACHE"
 
    arguments "$@"
@@ -829,10 +989,60 @@ main() {
       upgrade-report
    ;;
    "snapshot-list")
-      snapshot-list "${hosts[@]}"
+      cache="snapshots"
+      runaction "snapshot-list" "$cache" "${hosts[@]}"
+      frmt new snaprep ${report}
+      for host in "${hosts[@]}"; do
+         unset cts
+         test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
+         if test "${#cts[*]}" -gt 0; then
+            snaprep h1 "$host"
+            snaprep t_head "Container" "Snapshot(s)"
+            for ct in "${cts[@]}"; do
+               unset date ctname ctid snapshots
+               . "$CACHE/$cache/$host/$ct"
+               snaprep t_line "$ct" "${snapshots[*]}"
+            done
+            snaprep t_end
+         fi
+      done
+      snaprep del
    ;;
    "snapshot-rm")
-      snapshot-rm "${hosts[@]}"
+      cache="snapshots"
+      #snapshot-rm "${hosts[@]}"
+      runaction "snapshot-rm" "$cache" "${hosts[@]}"
+      frmt new snaprep ${report}
+      for host in "${hosts[@]}"; do
+         unset cts
+         test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
+         if test "${#cts[*]}" -gt 0; then
+            snaprep h1 "$host"
+            snaprep t_head "Container" "Snapshot(s)"
+            for ct in "${cts[@]}"; do
+               unset date ctname ctid snapshots
+               . "$CACHE/$cache/$host/$ct"
+               snaprep t_line "$ct" "${snapshots[*]}"
+            done
+            snaprep t_end
+         fi
+      done
+      snaprep del
+   ;;
+   "test")
+      cache="testcache"
+      runaction "testing" "$cache" "${hosts[@]}"
+      for host in "${hosts[@]}"; do
+         unset cts
+         test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
+         if test "${#cts[*]}" -gt 0; then
+            for ct in "${cts[@]}"; do
+               unset date ctname ctid snapshots
+               . "$CACHE/$cache/$host/$ct"
+               echo "$host $ct: ${snapshots[*]}"
+            done
+         fi
+      done
    ;;
    *) echo "Unknown action $action"; usage ;;
    esac

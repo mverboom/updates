@@ -44,8 +44,14 @@ actions back to back.
 
 ### Configuration
 
-A configuration file can be created with .ini style formatting. There are several
-sections that configure the script.
+A configuration file can be created with .ini style formatting.
+
+Per default the configuration will be read from
+```~/.updates.ini```
+This can be overridden with the -c option or the environment variable
+```UPDATESCFG```
+
+There are several sections that configure the script.
 
 #### [main]
 
