@@ -3,7 +3,7 @@
 # Upgrade systems and create report
 #
 
-inc=( "$( dirname $( realpath "$0") )/$lib" "$(dirname $0)" )
+inc=( "$( dirname $( realpath "$0") )" "$( dirname $( type -p $0))" "$(dirname $0)" )
 for lib in libfrmt.sh libwiki.sh libupdates.sh; do
    found=0
    for libinc in "${inc[@]}"; do
@@ -136,8 +136,8 @@ check-report() {
    checkreport print "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" >> "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
-      [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
-      [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
+      test "${#hostlists[@]}" -gt 0 && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
+      test "${#hostcmds[@]}" -gt 0  && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
       makesection check-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$reportoutput"
    done
    checkreport del >> "$reportoutput"
@@ -427,8 +427,8 @@ upgrade-report() {
    echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" > "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
-      [[ -v hostlists[@] ]] && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
-      [[ -v hostcmds[@] ]] && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
+      test "${#hostlists[@]}" -gt 0 && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
+      test "${#hostcmds[@]}" -gt 0  && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
       makesection upgrade-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$reportoutput"
    done
    test "$report" = "" && { wiki save "${main[upgradereport]}" - < "$reportoutput" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; } }
