@@ -19,8 +19,6 @@ makesection() {
 
    sectionreport=$(mktemp)
 
-   done=0
-   num="$#"
    for host in "$@"; do
       hostrender=0
       if test -f "$cache/$host/$host"; then
@@ -34,7 +32,7 @@ makesection() {
          ctreport=$(mktemp)
          ctcount=0
          for ct in "${cts[@]}"; do
-            if test ! -z "$cache/$host/$ct"; then
+            if test -e "$cache/$host/$ct"; then
                $render "$cache/$host/$ct" >> "$ctreport" && ctcount=$(( ctcount + 1 ))
             fi
          done
@@ -46,7 +44,7 @@ makesection() {
             fi
             frmt new frmtreport ${outputformat} -b
             frmtreport foldstart "${ctcount} containers" >> "$sectionreport"
-            cat "$ctreport" >> "$sectionreport" >> "$sectionreport"
+            cat "$ctreport" >> "$sectionreport"
             frmtreport foldend >> "$sectionreport"
             frmtreport del
          fi
@@ -81,6 +79,16 @@ verifycache() {
    return 0
 }
 
+# Wait for one background job in the caller's `running` array to finish and
+# free its slot. Sets $slot to the freed index. Call only when the pool is full.
+parslot() {
+   wait -p pid -n ${running[*]}
+   for slot in ${!running[@]}; do
+      test "${running[$slot]}" = "$pid" && break
+   done
+   unset 'running[slot]'
+}
+
 check-render-host() {
    local output="$1"
    local h="$2"
@@ -92,7 +100,11 @@ check-render-host() {
    unset p1 p2
    test "${#updates_avail[*]}" -gt 0 && local p1="${#updates_avail[*]} updates"
    test "${#updates_hold[*]}" -gt 0 -a "$reporthold" != "off" && local p2="${#updates_hold[*]} hold"
-   test "$p1" != "" -a "$p2" != "" && $output foldstart "$p1/$p2" || $output foldstart "$p1$p2"
+   if test "$p1" != "" -a "$p2" != ""; then
+      $output foldstart "$p1/$p2"
+   else
+      $output foldstart "$p1$p2"
+   fi
    $output t_head Package "Current version" "New version" Source
    if test "$reporthold" != "off"; then
       for pkg in ${updates_hold[*]}; do
@@ -146,16 +158,24 @@ check-report() {
    rm -f "$reportoutput"
 }
 
-check-save() {
-   local output="$1"
+host-save() {
+   local output="$1"; shift
    local date=$(date "+%s")
 
    {
-      declare -p host date | sed 's/ --/ -g/'
+      if test "$ret" = ""; then
+         declare -p host date | sed 's/ --/ -g/'
+      else
+         declare -p host date ret | sed 's/ --/ -g/'
+      fi
       test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
       test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
-      declare -p updates_avail updates_hold updates_curver updates_newver updates_newversrc | sed 's/ -[aA]/&g/'
+      declare -p "$@" | sed 's/ -[aA]/&g/'
    } > "$output"
+}
+
+check-save() {
+   host-save "$@" updates_avail updates_hold updates_curver updates_newver updates_newversrc
 }
 
 check-container() {
@@ -182,10 +202,6 @@ check-host() {
 
    [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
 
-   println() {
-      test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
-   }
-
    updatesfound=0
    test "${host//./}" = "$host" && { println "Skipping host ${host}, does not look like fqdn."; return; }
    updates is-container "$host" && { println "Skipping host ${host}, is a container."; return; }
@@ -211,11 +227,7 @@ check-host() {
       ctdone=$(( ctdone + 1 ))
       test "$QUIET" -eq 0 && println "$done/$num $host, ct: ${runningct[*]// /,} ($ctdone/${#containers[@]})" >&2
       if test "${#running[*]}" -eq $jobs; then
-         wait -p pid -n ${running[*]}
-         for slot in ${!running[@]}; do
-            test "${running[$slot]}" = "$pid" && break
-         done
-         unset 'running[slot]'
+         parslot
          unset 'runningct[slot]'
       else
          slot=$(( slot + 1 ))
@@ -245,11 +257,7 @@ check() {
       check-host $(( jobs - slot )) &
       running[$slot]="$!"
       if test "${#running[*]}" -eq $jobs; then
-         wait -p pid -n ${running[*]}
-         for slot in ${!running[@]}; do
-            test "${running[$slot]}" = "$pid" && break
-         done
-         unset 'running[slot]'
+         parslot
       else
          slot=$(( slot + 1 ))
       fi
@@ -258,15 +266,7 @@ check() {
 }
 
 upgradehost-save() {
-   local output="$1"
-   local date=$(date "+%s")
-
-   {
-      declare -p host date ret | sed 's/ --/ -g/'
-      test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
-      test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
-      declare -p updates_output | sed 's/ -[aA]/&g/'
-   } > "$output"
+   host-save "$@" updates_output
 }
 
 upgrade-container() {
@@ -292,10 +292,6 @@ upgrade-host() {
    unset ctname ctid
    local slot=0
    checkhost=1
-
-   println() {
-      test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
-   }
 
    [[ " ${hostexcl[@]} " =~ " ${host} " ]] && checkhost=0
    [[ " ${blacklist[@]} " =~ " ${host} " ]] && test "$NOCTBL" != 1 && return
@@ -332,11 +328,7 @@ upgrade-host() {
       ctdone=$(( ctdone + 1 ))
       test "$QUIET" -eq 0 && println "$done/$num $host, ct: ${runningct[*]// /,} ($ctdone/${#containers[@]})" >&2
       if test "${#running[*]}" -eq $jobs; then
-         wait -p pid -n ${running[*]}
-         for slot in ${!running[@]}; do
-            test "${running[$slot]}" = "$pid" && break
-         done
-         unset 'running[slot]'
+         parslot
          unset 'runningct[slot]'
       else
          slot=$(( slot + 1 ))
@@ -367,11 +359,7 @@ upgrade() {
       upgrade-host $(( jobs - slot )) &
       running[$slot]="$!"
       if test "${#running[*]}" -eq $jobs; then
-         wait -p pid -n ${running[*]}
-         for slot in ${!running[@]}; do
-            test "${running[$slot]}" = "$pid" && break
-         done
-         unset 'running[slot]'
+         parslot
       else
          slot=$(( slot + 1 ))
       fi
@@ -424,66 +412,72 @@ upgrade-report() {
 
    test "$report" = "" && { wiki connect || { echo "Unable to connect to wiki ($(wiki error))."; exit 1; } }
    reportoutput=$(mktemp)
-   echo "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" > "$reportoutput"
+   frmt new upgradereport ${outputformat} > "$reportoutput"
+   upgradereport print "Generated on: $(date "+%Y/%m/%d  %H:%M:%S") (results after $(date -d "@$reportafter" "+%Y/%m/%d  %H:%M:%S"))" >> "$reportoutput"
    for section in $( printf "%s\n" ${!hostsectionnames[@]} | sort ); do
       unset systems
       test "${#hostlists[@]}" -gt 0 && test "${hostlists[$section]}" != "" && systems=( ${hostlists[$section]} )
       test "${#hostcmds[@]}" -gt 0  && test "${hostcmds[$section]}" != "" && systems=( $( bash -c "${hostcmds[$section]}" ) )
       makesection upgrade-report-hosts "$cache" "${hostsectionnames[$section]}" "${systems[@]}" >> "$reportoutput"
    done
+   upgradereport del >> "$reportoutput"
    test "$report" = "" && { wiki save "${main[upgradereport]}" - < "$reportoutput" || { echo "Unable to save to wiki ($(wiki error))."; exit 1; } }
    test "$report" != "" && cat "$reportoutput"
    rm -f "$reportoutput"
 }
 
+snapshot-run() {
+   local subcmd="$1"; shift
+   local cache="$1"
+   local host="$2"
+   local ctid="$3"
+
+   test "$ctid" = "" && return
+   rm -f "$cache"
+   updates "$subcmd" "$host" "$ctid" ${snapfilter[@]}
+   if test "$?" -eq 0 -a "${#snapshots[*]}" -gt 0; then
+      local date=$(date "+%s")
+      local ctname="${containers[$ctid]}"
+      {
+         declare -p host date | sed 's/ --/ -g/'
+         test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
+         test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
+         declare -p snapshots | sed 's/ -[aA]/&g/'
+      } > "$cache"
+   else
+      return 1
+   fi
+   return 0
+}
+
+snapshot-rm() { snapshot-run snapshot-rm "$@"; }
+snapshot-list() { snapshot-run snapshot-list "$@"; }
+
+snapshot-report() {
+   local cache="$1"
+   frmt new snaprep ${report}
+   for host in "${hosts[@]}"; do
+      unset cts
+      test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
+      if test "${#cts[*]}" -gt 0; then
+         snaprep h1 "$host"
+         snaprep t_head "Container" "Snapshot(s)"
+         for ct in "${cts[@]}"; do
+            unset date ctname ctid snapshots
+            . "$CACHE/$cache/$host/$ct"
+            snaprep t_line "$ct" "${snapshots[*]}"
+         done
+         snaprep t_end
+      fi
+   done
+   snaprep del
+}
+
+# Print a progress line at the caller's screen row ($line). $line must be set by the
+# caller (check-host/upgrade-host/runhost all declare it local). Fork-safe: each
+# parallel host/container runs in its own subshell with its own copy.
 println() {
    test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
-}
-
-snapshot-rm() {
-   local cache="$1"
-   local host="$2"
-   local ctid="$3"
-
-   test "$ctid" = "" && return
-   rm -f "$cache"
-   updates snapshot-rm "$host" "$ctid" ${snapfilter[@]}
-   if test "$?" -eq 0 -a "${#snapshots[*]}" -gt 0; then
-      local date=$(date "+%s")
-      local ctname="${containers[$ctid]}"
-      {
-         declare -p host date | sed 's/ --/ -g/'
-         test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
-         test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
-         declare -p snapshots | sed 's/ -[aA]/&g/'
-      } > "$cache"
-   else
-      return 1
-   fi
-   return 0
-}
-
-snapshot-list() {
-   local cache="$1"
-   local host="$2"
-   local ctid="$3"
-
-   test "$ctid" = "" && return
-   rm -f "$cache"
-   updates snapshot-list "$host" "$ctid" ${snapfilter[@]} 
-   if test "$?" -eq 0 -a "${#snapshots[*]}" -gt 0; then
-      local date=$(date "+%s")
-      local ctname="${containers[$ctid]}"
-      {
-         declare -p host date | sed 's/ --/ -g/'
-         test "$ctname" != "" && declare -p ctname | sed 's/ --/ -g/'
-         test "$ctid" != "" && declare -p ctid | sed 's/ --/ -g/'
-         declare -p snapshots | sed 's/ -[aA]/&g/'
-      } > "$cache"
-   else
-      return 1
-   fi
-   return 0
 }
 
 runcontainer() {
@@ -532,11 +526,7 @@ runhost() {
       ctdone=$(( ctdone + 1 ))
       println "$done/$num $host, ct: ${runningct[*]// /,} ($ctdone/${#containers[@]})" >&2
       if test "${#running[*]}" -eq $jobs; then
-         wait -p pid -n ${running[*]}
-         for slot in ${!running[@]}; do
-            test "${running[$slot]}" = "$pid" && break
-         done
-         unset 'running[slot]'
+         parslot
          unset 'runningct[slot]'
       else
          slot=$(( slot + 1 ))
@@ -573,11 +563,7 @@ runaction() {
       test "$newslot" -gt "$maxslot" && maxslot="$newslot"
       running[$slot]="$!"
       if test "${#running[*]}" -eq $jobs; then
-         wait -p pid -n ${running[*]}
-         for slot in ${!running[@]}; do
-            test "${running[$slot]}" = "$pid" && break
-         done
-         unset 'running[slot]'
+         parslot
       else
          slot=$(( slot + 1 ))
       fi
@@ -808,7 +794,7 @@ arguments() {
       test $# -ne 0 && hosts=( "$@" )
    ;;
    "check-report")
-      while getopts :hHfp:i:e:E:awA: opt; do
+      while getopts :hHp:awA: opt; do
          case $opt in
          h) usage $action;;
          H) reporthold=off;;
@@ -849,7 +835,7 @@ arguments() {
       fi
    ;;
    "upgrade-report")
-      while getopts :hefp:i:e:E:aswA: opt; do
+      while getopts :hep:aswA: opt; do
          case $opt in
          h) usage $action;;
          e) reporterr=1;;
@@ -908,26 +894,6 @@ arguments() {
          done
       fi
    ;;
-   "test")
-      while getopts :h opt; do
-         case $opt in
-         h) usage $action;;
-         \?) echo "Unknown option: -$OPTARG"; usage $action;;
-         :) echo "Option -$OPTARG requires argument"; usage $action;;
-         esac
-      done
-      PARALLEL=1
-      shift $((OPTIND-1))
-      test $# -ne 0 && hosts=( "$@" )
-      if test "${#hosts[*]}" -eq 0; then
-         hosts=( "${allhosts[@]}" )
-      else
-         for host in ${hosts[@]}; do
-            [[ ! " ${allhosts[@]} " =~ " ${host} " ]] && { echo "Host ${host} not part of all hosts."; exit 1; }
-         done
-      fi
-   ;;
-
    *) echo "Unknown action $action"; usage ;;
    esac
    if test "$PARALLEL" = "1"; then
@@ -991,58 +957,12 @@ main() {
    "snapshot-list")
       cache="snapshots"
       runaction "snapshot-list" "$cache" "${hosts[@]}"
-      frmt new snaprep ${report}
-      for host in "${hosts[@]}"; do
-         unset cts
-         test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
-         if test "${#cts[*]}" -gt 0; then
-            snaprep h1 "$host"
-            snaprep t_head "Container" "Snapshot(s)"
-            for ct in "${cts[@]}"; do
-               unset date ctname ctid snapshots
-               . "$CACHE/$cache/$host/$ct"
-               snaprep t_line "$ct" "${snapshots[*]}"
-            done
-            snaprep t_end
-         fi
-      done
-      snaprep del
+      snapshot-report "$cache"
    ;;
    "snapshot-rm")
       cache="snapshots"
-      #snapshot-rm "${hosts[@]}"
       runaction "snapshot-rm" "$cache" "${hosts[@]}"
-      frmt new snaprep ${report}
-      for host in "${hosts[@]}"; do
-         unset cts
-         test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
-         if test "${#cts[*]}" -gt 0; then
-            snaprep h1 "$host"
-            snaprep t_head "Container" "Snapshot(s)"
-            for ct in "${cts[@]}"; do
-               unset date ctname ctid snapshots
-               . "$CACHE/$cache/$host/$ct"
-               snaprep t_line "$ct" "${snapshots[*]}"
-            done
-            snaprep t_end
-         fi
-      done
-      snaprep del
-   ;;
-   "test")
-      cache="testcache"
-      runaction "testing" "$cache" "${hosts[@]}"
-      for host in "${hosts[@]}"; do
-         unset cts
-         test -d "$CACHE/$cache/$host/" && cts=( $( ls "$CACHE/$cache/$host/" 2> /dev/null | grep -v "$host" ) )
-         if test "${#cts[*]}" -gt 0; then
-            for ct in "${cts[@]}"; do
-               unset date ctname ctid snapshots
-               . "$CACHE/$cache/$host/$ct"
-               echo "$host $ct: ${snapshots[*]}"
-            done
-         fi
-      done
+      snapshot-report "$cache"
    ;;
    *) echo "Unknown action $action"; usage ;;
    esac
