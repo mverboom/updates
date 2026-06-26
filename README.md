@@ -185,6 +185,25 @@ servers in parallel will run 2 containers in parallel on each host.
 
 ```updates check -p```
 
+### Progress output
+
+While running in parallel, progress is shown for each host/container. The way this
+is displayed is controlled by the `UPDATES_PROGRESS` environment variable:
+
+* `terminal` (default): in-place live multi-line updates using terminal cursor
+  codes. Requires a real terminal.
+* `iframe`: a streaming live HTML/JS dashboard with one row per host that ticks
+  in place in the browser. Use this together with [script-server](https://github.com/bugy/script-server)
+  by setting the script's `output_format` to `html_iframe`. Since `html_iframe`
+  runs unsanitised output (including scripts), only use it on instances trusted
+  by you.
+* `plain`: one simple line per progress event, no cursor codes. Useful for
+  piping to a log file or any non-terminal viewer.
+* `auto`: `terminal` when stderr is a TTY, `plain` otherwise.
+
+The reports themselves already render as a full HTML document, so they display
+fine under script-server with `output_format` set to `html_iframe` (or `html`).
+
 ## Reporting updates
 
 Based on the information stored in the cache, a report can be generated and

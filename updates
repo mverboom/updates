@@ -251,7 +251,7 @@ check() {
    test "$UPDATE" -eq 1 && opts+=( "-u" )
    test "$#" -lt "$jobs" && jobs="$#"
 
-   test "$QUIET" -eq 0 && printf '%.0s\n' $(seq 1 $jobs)
+   progress_reserve "$jobs"
    for host in "$@"; do
       done=$(( done + 1 ))
       check-host $(( jobs - slot )) &
@@ -353,7 +353,7 @@ upgrade() {
 
    test "$#" -lt "$jobs" && jobs="$#"
 
-   test "$QUIET" -eq 0 && printf '%.0s\n' $(seq 1 $jobs)
+   progress_reserve "$jobs"
    for host in "$@"; do
       done=$(( done + 1 ))
       upgrade-host $(( jobs - slot )) &
@@ -473,11 +473,112 @@ snapshot-report() {
    snaprep del
 }
 
-# Print a progress line at the caller's screen row ($line). $line must be set by the
-# caller (check-host/upgrade-host/runhost all declare it local). Fork-safe: each
-# parallel host/container runs in its own subshell with its own copy.
+# Decide how parallel progress is shown. Controlled by the UPDATES_PROGRESS env var:
+#   terminal  - in-place cursor updates (default; needs a real terminal)
+#   iframe    - streaming live HTML/JS dashboard (use with script-server output_format
+#               html_iframe; gives a per-host live progress view in the browser)
+#   plain     - one simple line per progress event, no cursor codes
+#   auto      - terminal when stderr is a TTY, plain otherwise
+progress_mode() {
+   local m="${UPDATES_PROGRESS:-auto}"
+   case "$m" in
+      terminal|iframe|plain) printf '%s' "$m" ;;
+      auto) [ -t 2 ] && printf terminal || printf plain ;;
+      *) printf terminal ;;
+   esac
+}
+
+# Escape a string so it is safe to embed inside a JavaScript single-quoted string
+# (also neutralises </script> and other HTML-breaking sequences).
+esc_js() {
+   local s="$1"
+   s="${s//\\/\\\\}"
+   s="${s//\'/\\x27}"
+   s="${s//</\\x3c}"
+   s="${s//>/\\x3e}"
+   s="${s//$'\n'/ }"
+   s="${s//$'\r'/ }"
+   printf '%s' "$s"
+}
+
+# Emit the (once) HTML scaffold for the iframe live dashboard. Idempotent.
+progress_scaffold() {
+   test "${_UPD_SCAFFOLD:-0}" = 1 && return
+   _UPD_SCAFFOLD=1
+   cat >&2 <<'HTML'
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<style>
+#upd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.45}
+.upd-row{display:flex;align-items:center;gap:.5em;padding:2px 6px;margin:1px 0;border-left:3px solid #bbb;background:#fafafa}
+.upd-row.done{opacity:.5;background:#eee;border-left-color:#3a3}
+.upd-host{font-weight:600;min-width:18em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upd-msg{flex:1;white-space:pre}
+.upd-spin{flex:0 0 12px;width:12px;height:12px;border:2px solid #ccc;border-top-color:#444;border-radius:50%;animation:updsp .8s linear infinite}
+.done .upd-spin{display:none}
+@keyframes updsp{to{transform:rotate(360deg)}}
+</style></head><body>
+<div id="upd"></div>
+<script>
+(function(){
+ var rows={};
+ window.upd_set=function(host,msg){
+  var r=rows[host];
+  if(!r){
+   r=document.createElement('div');r.className='upd-row';
+   var sp=document.createElement('span');sp.className='upd-spin';r.appendChild(sp);
+   var h=document.createElement('span');h.className='upd-host';h.textContent=host;r.appendChild(h);
+   var m=document.createElement('span');m.className='upd-msg';r.appendChild(m);
+   document.getElementById('upd').appendChild(r);
+   rows[host]={el:r,msg:m};
+  }
+  rows[host].msg.textContent=msg;
+ };
+ window.upd_done=function(host){ var r=rows[host]; if(r){r.el.classList.add('done');} };
+})();
+</script>
+HTML
+}
+
+# Reserve the progress display at the start of a parallel run. $1 is the number of
+# parallel slots (only meaningful for terminal mode).
+progress_reserve() {
+   test "$QUIET" -eq 0 || return
+   case "$PROMODE" in
+      terminal) printf '%.0s\n' $(seq 1 "$1") ;;
+      iframe) progress_scaffold ;;
+      plain) ;;
+   esac
+}
+
+# Tear down the reserved progress display at the end of a parallel run.
+progress_finish() {
+   test "$QUIET" -eq 0 || return
+   case "$PROMODE" in
+      terminal) local l; for l in $(seq 1 "$1"); do printf "\e[%dA\e[K\r" "1"; done ;;
+      *) ;;
+   esac
+}
+
+# Print a progress line for the current host. In terminal mode it is drawn in place at
+# the caller's screen row ($line); the caller declares $line and $host locally and each
+# parallel host/container runs in its own subshell. In iframe mode each call streams one
+# atomic <script> update to the live dashboard; in plain mode it just prints the line.
 println() {
-   test "$QUIET" -eq 0 && printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line"
+   test "$QUIET" -eq 0 || return
+   case "$PROMODE" in
+      terminal) printf "\e[%dA\e[K%s\e[%dB\r" "$line" "$1" "$line" ;;
+      plain) printf '%s\n' "$1" >&2 ;;
+      iframe)
+         local _h _m
+         _h="$(esc_js "$host")"
+         _m="$(esc_js "$1")"
+         if [[ "$1" == *" done" ]]; then
+            printf "<script>window.upd_set('%s','%s');window.upd_done('%s');</script>\n" "$_h" "$_m" "$_h" >&2
+         else
+            printf "<script>window.upd_set('%s','%s');</script>\n" "$_h" "$_m" >&2
+         fi
+         ;;
+   esac
 }
 
 runcontainer() {
@@ -555,7 +656,7 @@ runaction() {
    test "$#" -lt "$jobs" && jobs="$#"
    test ! -d "$cache" && mkdir -p "$cache"
 
-   test "$QUIET" -eq 0 && printf '%.0s\n' $(seq 1 $jobs)
+   progress_reserve "$jobs"
    for host in "$@"; do
       done=$(( done + 1 ))
       newslot=$(( jobs - slot ))
@@ -569,9 +670,7 @@ runaction() {
       fi
    done
    wait
-   test "$QUIET" -eq 0 && for l in $(seq 1 $maxslot); do
-      printf "\e[%dA\e[K\r" "1"
-   done
+   progress_finish "$maxslot"
 }
 
 usage() {
@@ -931,6 +1030,8 @@ main() {
    ! test -d "$CACHE" && mkdir "$CACHE"
 
    arguments "$@"
+
+   PROMODE="$(progress_mode)"
 
    wiki profile "${main[wikiprofile]}" || { echo "Unable to open wiki ($(wiki error))"; exit 1; }
    outputformat=$( wiki type )
